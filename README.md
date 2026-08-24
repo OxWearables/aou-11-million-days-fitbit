@@ -14,8 +14,8 @@ The repository consists of four scripts, intended to be run in sequence.
 | File | Language | Purpose |
 |---|---|---|
 | `1_data-import.Rmd` | R | Imports raw variables from AoU via SQL/BigQuery, cleans and processes covariates and Fitbit-derived exposures, applies exclusion criteria, and derives time-windowed activity phenotypes |
-| `2a_PheWAS.ipynb` | Python | Runs the primary PheWAS (logistic regression for prevalent associations; Cox regression for incident associations) across step count, peak 1-min cadence, peak 30-min cadence, and daily heart rate per step metrics at multiple time windows |
-| `2b_PheWAS-sensitivity.ipynb` | Python | Runs sensitivity PheWAS analyses (adjusting for BMI, applying a washout period, restricting to one year of Fitbit data, and excluding the first three years of follow-up) |
+| `2a_PheWAS.md` | Python | Runs the primary PheWAS (logistic regression for prevalent associations; Cox regression for incident associations) across step count, peak 1-min cadence, peak 30-min cadence, and daily heart rate per step metrics at multiple time windows |
+| `2b_PheWAS-sensitivity.md` | Python | Runs sensitivity PheWAS analyses (adjusting for BMI, applying a washout period, restricting to one year of Fitbit data, and excluding the first three years of follow-up) |
 | `3_tables-figures.Rmd` | R | Loads all PheWAS outputs and generates the manuscript's tables and figures |
 
 ---
