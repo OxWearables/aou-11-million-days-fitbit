@@ -71,4 +71,4 @@ The repository consists of four scripts, intended to be run in sequence.
 - File paths reference a standard AoU Workbench bucket structure; update local paths as needed if adapting outside this environment.
 - The kernel must be restarted after installing `PheTK` before importing its submodules (noted inline in the notebooks).
 - Bonferroni thresholds are computed per analysis using the number of tested phecodes in that specific run, not a single global constant.
-- Because this uses AoU Controlled Tier data, no participant-level data or rendered outputs containing cell counts below the AoU minimum cell size threshold (n = 20) should be exported outside the Workbench or committed to a public repository, consistent with AoU data use policies.
+- Because this uses AoU Controlled Tier data, no participant-level data or rendered outputs containing cell counts below the AoU minimum cell size threshold (n < 20) should be exported outside the Workbench or committed to a public repository, consistent with AoU data use policies.
