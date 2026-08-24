@@ -1,0 +1,985 @@
+# Background and use
+
+This script is used to 1) import all variables used in this analysis using SQL, 2) clean and process the data for subsequent analyses.
+
+# Setup
+
+Install and load in necessary packages:
+
+```{r}
+install.packages("pacman")
+pacman::p_load(
+  tidyverse,
+  bigrquery,
+  jsonlite,
+  mice,
+  table1
+)
+```
+
+Define environmental variables:
+
+```{r}
+library(jsonlite)
+
+wb <- function(...) fromJSON(system(paste("wb", ..., "--format=json"), intern = TRUE))
+
+workspace <- wb("workspace describe")
+GOOGLE_CLOUD_PROJECT <- workspace$googleProjectId
+
+resources <- wb("resource list")
+
+# WORKSPACE_BUCKET
+bucket_row <- resources[resources$resourceType == "GCS_BUCKET" &
+                        grepl("workspace-bucket", resources$id) &
+                        !grepl("temporary", resources$id), ]
+WORKSPACE_BUCKET <- paste0("gs://", bucket_row$bucketName[1])
+
+# WORKSPACE_CDR
+bq <- resources[resources$resourceType %in% c("BQ_DATASET", "BIGQUERY_DATASET"), ]
+cdr_row <- bq[grepl("^C\\d{4}Q\\d+R\\d+$", bq$datasetId), ]
+WORKSPACE_CDR <- paste0(cdr_row$projectId[1], ".", cdr_row$datasetId[1])
+
+# Summary
+for (var in c("GOOGLE_CLOUD_PROJECT", "WORKSPACE_BUCKET", "WORKSPACE_CDR")) {
+  val <- get(var)
+  cat(var, ":", if (length(val) && nzchar(val)) val else "NOT FOUND", "\n")
+}
+```
+
+Define necessary function:
+
+```{r}
+download_data <- function(query) {
+  tb <- bq_project_query(GOOGLE_CLOUD_PROJECT, 
+                         query = str_glue(query), 
+                         default_dataset = WORKSPACE_CDR)
+  bq_table_download(tb)
+}
+```
+
+# Data import
+
+## Covariates
+
+All covariates are imported in the same way:
+
+1. Import raw variable data using SQL
+2. Minimally process the variable
+3. Merge into one covariate dataframe
+
+### EHR
+
+```{r}
+ehr_query <- "
+    SELECT
+        person_id,
+        MIN(condition_start_date) AS date_first_ehr,
+        MAX(condition_start_date) AS date_last_ehr
+    FROM
+        condition_occurrence
+    GROUP BY
+        person_id
+"
+
+df_ehr <- download_data(ehr_query)
+
+df_ehr <- df_ehr %>%
+    mutate(length_ehr = as.numeric(date_last_ehr - date_first_ehr))
+```
+
+### Sex at birth
+
+```{r}
+sex_query <- "
+    SELECT
+        person_id,
+        answer AS sex
+    FROM
+        ds_survey
+    WHERE
+        (question_concept_id IN (1585845))
+"
+
+df_sex <- download_data(sex_query)
+
+df_sex <- df_sex %>%
+    mutate(sex = case_when(
+        sex == "Sex At Birth: Female" ~ 1,
+        sex == "Sex At Birth: Male" ~ 2,
+        sex == "Sex At Birth: Intersex" ~ NA_integer_,
+        sex == "Sex At Birth: Sex At Birth None of These" ~ NA_integer_,
+        sex == "PMI: Skip" ~ NA_integer_,
+        sex == "PMI: Prefer Not To Answer" ~ NA_integer_),
+           sex = factor(sex,
+                        levels = c(1, 2),
+                        labels = c("Female", "Male")))
+
+df_covar <- df_ehr %>%
+    left_join(df_sex, by = "person_id")
+```
+
+### Race/ethnicity
+
+```{r}
+race_eth_query <- "
+    SELECT
+        person_id,
+        answer AS race_eth
+    FROM
+        ds_survey
+    WHERE
+        (question_concept_id IN (1586140))
+"
+
+df_race_eth <- download_data(race_eth_query)
+
+df_race_eth <- df_race_eth %>%
+    mutate(
+        race_eth_code = case_when(
+            race_eth == "What Race Ethnicity: White" ~ 1,
+            race_eth == "What Race Ethnicity: Black" ~ 2,
+            race_eth == "What Race Ethnicity: Hispanic" ~ 3,
+            race_eth %in% c("PMI: Skip", "PMI: Prefer Not To Answer") ~ NA_integer_,
+            TRUE ~ 4
+        )
+    )
+
+df_race_eth <- df_race_eth %>%
+    group_by(person_id) %>%
+    summarise(
+        race_eth_code = if (n_distinct(na.omit(race_eth_code)) > 1) 4 else first(na.omit(race_eth_code)),
+            .groups = "drop"
+        ) %>%
+    mutate(
+        race_eth = factor(race_eth_code,
+                          levels = c(1, 2, 3, 4),
+                          labels = c("White", "Black or African American", "Hispanic", "Other"))
+  ) %>%
+    select(-race_eth_code)
+
+df_covar <- df_covar %>%
+    left_join(df_race_eth, by = "person_id")
+```
+
+### Income
+
+```{r}
+income_query <- "
+    SELECT
+        person_id,
+        answer AS income
+    FROM
+        ds_survey
+    WHERE
+        (question_concept_id IN (1585375))
+"
+
+df_income <- download_data(income_query)
+
+df_income <- df_income %>%
+    mutate(income = case_when(
+        income == "Annual Income: less 10k" ~ 1,
+        income == "Annual Income: 10k 25k" ~ 1,
+        income == "Annual Income: 25k 35k" ~ 1,
+        income == "Annual Income: 35k 50k" ~ 2,
+        income == "Annual Income: 50k 75k" ~ 2,
+        income == "Annual Income: 75k 100k" ~ 3,
+        income == "Annual Income: 100k 150k" ~ 3,
+        income == "Annual Income: 150k 200k" ~ 4,
+        income == "Annual Income: more 200k" ~ 4,
+        income == "PMI: Skip" ~ 5,
+        income == "PMI: Prefer Not To Answer" ~ 5),
+          income = factor(income,
+                          levels = c(1, 2, 3, 4, 5),
+                          labels = c("<35k", "35-75k", "75-150k", ">150k", "Prefer not to answer")))
+
+df_covar <- df_covar %>%
+    left_join(df_income, by = "person_id")
+```
+
+### Alcohol
+
+```{r}
+alcohol_ever_query <- "
+    SELECT
+        person_id,
+        answer AS alcohol_ever
+    FROM
+        ds_survey
+    WHERE
+        (question_concept_id IN (1586198))
+"
+
+df_alcohol_ever <- download_data(alcohol_ever_query)
+
+alcohol_freq_query <- "
+    SELECT
+        person_id,
+        answer AS alcohol_freq
+    FROM
+        ds_survey
+    WHERE
+        (question_concept_id IN (1586201))
+"
+
+df_alcohol_freq <- download_data(alcohol_freq_query)
+
+df_alcohol <- df_alcohol_ever %>%
+    full_join(df_alcohol_freq, by = "person_id")
+
+df_alcohol <- df_alcohol %>%
+    mutate(alcohol = case_when(
+        alcohol_ever == "Alcohol Participant: No" ~ 1,
+        alcohol_ever == "Alcohol Participant: Yes" & alcohol_freq == "Drink Frequency Past Year: Never" ~ 2,
+        alcohol_freq == "Drink Frequency Past Year: Monthly Or Less" ~ 3,
+        alcohol_freq == "Drink Frequency Past Year: 2 to 4 Per Month" ~ 3,
+        alcohol_freq == "Drink Frequency Past Year: 2 to 3 Per Week" ~ 4,
+        alcohol_freq == "Drink Frequency Past Year: 4 or More Per Week" ~ 4,
+        alcohol_ever == "PMI: Prefer Not To Answer" & alcohol_freq == "PMI: Prefer Not To Answer" ~ NA_integer_,
+        alcohol_ever == "PMI: Skip" & alcohol_freq == "PMI: Skip" ~ NA_integer_),
+           alcohol = factor(alcohol,
+                   levels = c(1, 2, 3, 4),
+                   labels = c("Never alcohol consumer",
+                              "Past alcohol consumer",
+                              "Current alcohol consumer - monthly", 
+                              "Current alcohol consumer - weekly"))) %>%
+    select(-c("alcohol_ever", "alcohol_freq"))
+
+df_covar <- df_covar %>%
+    left_join(df_alcohol, by = "person_id")
+```
+
+### Smoking
+
+```{r}
+smoking_query <- "
+    SELECT
+        person_id,
+        answer AS smoking
+    FROM
+        ds_survey
+    WHERE
+        (question_concept_id IN (1585857))
+"
+
+df_smoking <- download_data(smoking_query)
+
+df_smoking <- df_smoking %>%
+    mutate(smoking = case_when(
+        smoking == "100 Cigs Lifetime: Yes" ~ 1,
+        smoking == "100 Cigs Lifetime: No" ~ 2,
+        smoking == "PMI: Dont Know" ~ NA_integer_,
+        smoking == "PMI: Prefer Not To Answer" ~ NA_integer_,
+        smoking == "PMI: Skip" ~ NA_integer_),
+           smoking = factor(smoking,
+                   levels = c(1, 2),
+                   labels = c("Current or past smoker",
+                              "Never smoker")))
+
+df_covar <- df_covar %>%
+    left_join(df_smoking, by = "person_id")
+```
+
+### BMI
+
+```{r}
+height_query <- "
+    SELECT
+        person_id,
+        value_as_number AS height,
+        unit_source_value AS height_unit,
+        measurement_datetime AS height_datetime,
+        measurement_date
+    FROM
+        measurement
+    WHERE
+        (measurement_source_concept_id IN (903133))
+"
+
+df_height <- download_data(height_query)
+
+df_height <- df_height %>%
+    group_by(person_id) %>%
+    slice_min(height_datetime, with_ties = FALSE) %>% # Get first height measurement
+    ungroup() %>%
+    na.omit()
+
+weight_query <- "
+    SELECT
+        person_id,
+        value_as_number AS weight,
+        unit_source_value AS weight_unit,
+        measurement_datetime AS weight_datetime,
+        measurement_date
+    FROM
+        measurement
+    WHERE
+        (measurement_source_concept_id IN (903121))
+"
+
+df_weight <- download_data(weight_query)
+
+df_weight <- df_weight %>%
+    group_by(person_id) %>%
+    slice_min(weight_datetime, with_ties = FALSE) %>% # Get first weight measurement
+    ungroup() %>%
+    na.omit()
+
+df_bmi <- df_height %>%
+    inner_join(df_weight, by = c("person_id", "measurement_date")) %>%
+    mutate(
+        bmi = weight / ((height / 100)^2)
+    )
+
+df_bmi <- df_bmi %>%
+    mutate(bmi_cat = case_when(
+        bmi < 18.5 ~ 1,
+        bmi >= 18.5 & bmi < 25 ~ 2,
+        bmi >= 25 & bmi < 30 ~ 3,
+        bmi >= 30 ~ 4,
+        TRUE ~ NA_integer_),
+           bmi_cat = factor(bmi_cat,
+                   levels = c(1, 2, 3, 4),
+                   labels = c("Underweight",
+                              "Healthy weight",
+                              "Overweight",
+                              "Obesity"))) %>%
+    select(person_id, bmi_cat)
+
+df_covar <- df_covar %>%
+    left_join(df_bmi, by = "person_id")
+```
+
+### Age
+
+```{r}
+age_query <- "
+    SELECT
+        person_id,
+        CAST(person.birth_datetime AS DATE) AS date_of_birth
+    FROM
+        person
+"
+
+df_age <- download_data(age_query)
+
+df_covar <- df_covar %>%
+    left_join(df_age, by = "person_id")
+
+df_covar <- df_covar %>%
+    mutate(age_last_aou = time_length(interval(date_of_birth, as.Date("2023-10-01")), "years"))
+```
+
+### Imputation
+
+```{r}
+data.frame(
+  NA_Count = colSums(is.na(df_covar)),
+  Proportion = colMeans(is.na(df_covar))
+)
+```
+
+Use regression imputation on missing values:
+
+*Note that sex is not imputed as it is a necessary variable for subsequent analyses*
+
+```{r}
+df_covar_impute <- df_covar %>% filter(!is.na(sex))
+
+vars_to_impute <- c("race_eth", "income", "alcohol", "smoking", "bmi_cat")
+vars_for_model <- c("sex", vars_to_impute)
+
+df_mice <- df_covar_impute %>% select(all_of(vars_for_model))
+original_order <- names(df_covar_impute)
+
+method <- make.method(df_mice)
+method["sex"]        <- ""
+method["race_eth"]   <- "polyreg"
+method["income"]     <- "polyreg"
+method["alcohol"]    <- "polyreg"
+method["smoking"]    <- "logreg"
+method["bmi_cat"]    <- "polyreg"
+
+imp <- mice(df_mice, m = 1, method = method, seed = 123)
+
+df_imputed <- complete(imp, 1)
+
+df_output <- df_covar_impute
+df_output[vars_to_impute] <- df_imputed[vars_to_impute]
+
+df_covar <- df_output[, original_order]
+```
+
+```{r}
+data.frame(
+  NA_Count = colSums(is.na(df_covar)),
+  Proportion = colMeans(is.na(df_covar))
+)
+```
+
+### Summarize the covariate data
+
+```{r}
+label(df_covar$age_last_aou) <- "Age at All of Us censor date"
+label(df_covar$sex) <- "Sex"
+label(df_covar$race_eth) <- "Race/ethnicity"
+label(df_covar$alcohol) <- "Alcohol consumption"
+label(df_covar$smoking) <- "Smoking history"
+label(df_covar$income) <- "Annual income"
+label(df_covar$bmi_cat) <- "Body mass index"
+
+output <- table1(~ age_last_aou + sex + race_eth + alcohol + smoking + income + bmi_cat, 
+                 data = df_covar, 
+                 render.continuous=c("Median [IQR]"="Median [Q1, Q3]"))
+
+tab1 <- as.data.frame(output)
+head(tab1, n = 40)
+```
+
+Save the dataframe:
+
+```{r}
+write_csv(df_covar, file = "df_covar.csv")
+
+system2("gcloud",
+        args = c("storage", "cp", "df_covar.csv", paste0(WORKSPACE_BUCKET, "/dataframes/")),
+        stdout = TRUE,
+        stderr = TRUE)
+```
+
+## Fitbit
+
+### Step count (steps)
+
+```{r}
+steps_query <- "
+    SELECT
+        person_id,
+        DATE(datetime) AS date,
+        SUM(steps) AS steps
+    FROM
+        steps_intraday
+    WHERE
+        steps > 0
+    GROUP BY
+        person_id,
+        DATE(datetime);
+"
+
+df_steps <- download_data(steps_query)
+```
+
+### Peak 1-min cadence (cadence1)
+
+```{r}
+cadence1_query <- "
+    SELECT
+        person_id,
+        DATE(datetime) AS date,
+        MAX(steps) AS cadence1
+    FROM
+        steps_intraday
+    WHERE
+        steps > 0
+    GROUP BY
+        person_id,
+        DATE(datetime);
+"
+
+df_cadence1 <- download_data(cadence1_query)
+```
+
+```{r}
+df_exposure <- df_steps %>%
+    merge(df_cadence1, by = c("person_id", "date"))
+```
+
+### Peak 30-min cadence (cadence30)
+
+```{r}
+cadence30_query <- "
+    WITH ranked_steps AS (
+        SELECT
+            person_id,
+            DATE(datetime) AS date,
+            steps,
+            ROW_NUMBER() OVER (
+                PARTITION BY person_id, DATE(datetime)
+                ORDER BY steps DESC
+            ) AS step_rank
+        FROM steps_intraday
+    )
+    SELECT
+        person_id,
+        date,
+        AVG(steps) AS cadence30
+    FROM
+        ranked_steps
+    WHERE
+        step_rank <= 30
+    GROUP BY
+        person_id,
+        date;
+"
+
+df_cadence30 <- download_data(cadence30_query)
+```
+
+```{r}
+df_exposure <- df_exposure %>%
+    merge(df_cadence30, by = c("person_id", "date"))
+```
+
+### Daily heart rate per step (dhrps)
+
+```{r}
+dhrps_query <- "
+    SELECT
+        person_id,
+        DATE(datetime) AS date,
+        AVG(heart_rate_value) AS avg_hr
+    FROM
+        heart_rate_minute_level
+    GROUP BY
+        person_id,
+        DATE(datetime);
+"
+
+df_dhrps <- download_data(dhrps_query)
+```
+
+```{r}
+df_exposure <- df_exposure %>%
+    merge(df_dhrps, by = c("person_id", "date"))
+```
+
+```{r}
+df_exposure <- df_exposure %>%
+    mutate(dhrps = avg_hr / steps)
+```
+
+### WEAR/BYOD
+
+```{r}
+wear_query <- "
+    SELECT
+        person_id,
+        resultsconsent_wear AS wear
+    FROM
+        wear_study
+"
+
+df_wear <- download_data(wear_query)
+```
+
+```{r}
+df_exposure <- df_exposure %>%
+    left_join(df_wear, by = "person_id") %>%
+    mutate(wear_status = factor(ifelse(!is.na(wear) & wear == "Yes", 1, 2),
+                                levels = c(1, 2),
+                                labels = c("WEAR", "BYOD"))) %>%
+    select(-wear)
+```
+
+### Wear time
+
+```{r}
+wear_time_query <- "
+    SELECT
+        person_id,
+        DATE(datetime) AS date,
+        COUNT(DISTINCT FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', datetime)) AS wear_time_minutes
+    FROM
+        heart_rate_minute_level
+    GROUP BY
+        person_id,
+        DATE(datetime)
+"
+df_wear_time <- download_data(wear_time_query)
+```
+
+```{r}
+df_exposure <- df_exposure %>%
+    merge(df_wear_time, by = c("person_id", "date"))
+```
+
+Save the dataframe:
+
+```{r}
+write_csv(df_exposure, file = "df_exposure.csv")
+
+system2("gcloud",
+        args = c("storage", "cp", "df_exposure.csv", paste0(WORKSPACE_BUCKET, "/dataframes/")),
+        stdout = TRUE,
+        stderr = TRUE)
+```
+
+# Data cleaning
+
+## Exclusions
+
+Initialize a table to keep track of exclusions:
+
+```{r}
+table_exclusions <- data.frame("Cohort" = "Cohort with EHR data",
+                               "Participants" = n_distinct(df_covar$person_id),
+                               "Participants_excluded" = NA,
+                               "Observations" = nrow(df_covar),
+                               "Observations_excluded" = NA)
+
+table_exclusions <- rbind(table_exclusions, 
+                          data.frame("Cohort" = "Cohort with Fitbit data", 
+                                     "Participants" = n_distinct(df_exposure$person_id),
+                                     "Participants_excluded" = NA,
+                                     "Observations" = nrow(df_exposure),
+                                     "Observations_excluded" = NA))
+```
+
+Participant is excluded if:
+1. They don't have both covariate and Fitbit data
+
+Day of data is excluded if:
+2. Age <18
+3. Step count <100
+4. Step count >75000
+5. Peak 1-min or peak 30-min cadence >210
+6. Average HR <20
+7. Average HR >220
+8. Daily heart rate per step <3 standard deviations below the mean
+9. Daily heart rate per step >3 standard deviations above the mean
+10. Wear time <16 hours
+
+```{r}
+# 1 (data availability exclusion)
+participants <- n_distinct(c(df_exposure$person_id, df_covar$person_id))
+observations <- nrow(df_exposure) + nrow(df_covar)
+
+df <- df_covar %>%
+    merge(df_exposure, by = "person_id")
+
+table_exclusions <- rbind(table_exclusions, 
+                          data.frame("Cohort" = "Cohort with EHR and Fitbit data", 
+                                     "Participants" = n_distinct(df$person_id),
+                                     "Participants_excluded" = participants - n_distinct(df$person_id),
+                                     "Observations" = nrow(df),
+                                     "Observations_excluded" = observations - nrow(df)))
+```
+
+```{r}
+# 2 (age exclusion)
+df <- df %>%
+    mutate(age_at_date = as.numeric(floor((date - date_of_birth)/365.25)))
+
+participants <- n_distinct(df$person_id)
+observations <- nrow(df)
+
+df <- df %>%
+    filter(age_at_date >= 18)
+
+table_exclusions <- rbind(table_exclusions, 
+                          data.frame("Cohort" = "All age >= 18", 
+                                     "Participants" = n_distinct(df$person_id),
+                                     "Participants_excluded" = participants - n_distinct(df$person_id),
+                                     "Observations" = nrow(df),
+                                     "Observations_excluded" = observations - nrow(df)))
+```
+
+```{r}
+# 3 and 4 (step count exclusion)
+participants <- n_distinct(df$person_id)
+observations <- nrow(df)
+
+df <- df %>%
+    filter(steps >= 100 & steps <= 75000)
+
+table_exclusions <- rbind(table_exclusions, 
+                          data.frame("Cohort" = "All step count >=100 and <= 75000 steps", 
+                                     "Participants" = n_distinct(df$person_id),
+                                     "Participants_excluded" = participants - n_distinct(df$person_id),
+                                     "Observations" = nrow(df),
+                                     "Observations_excluded" = observations - nrow(df)))
+```
+
+```{r}
+# 5 (cadence exclusion)
+participants <- n_distinct(df$person_id)
+observations <- nrow(df)
+
+df <- df %>%
+    filter(cadence1 <= 210)
+
+table_exclusions <- rbind(table_exclusions, 
+                          data.frame("Cohort" = "All cadence1 <= 210 steps/min", 
+                                     "Participants" = n_distinct(df$person_id),
+                                     "Participants_excluded" = participants - n_distinct(df$person_id),
+                                     "Observations" = nrow(df),
+                                     "Observations_excluded" = observations - nrow(df)))
+
+participants <- n_distinct(df$person_id)
+observations <- nrow(df)
+
+df <- df %>%
+    filter(cadence30 <= 210)
+
+table_exclusions <- rbind(table_exclusions, 
+                          data.frame("Cohort" = "All cadence30 <= 210 steps/min", 
+                                     "Participants" = n_distinct(df$person_id),
+                                     "Participants_excluded" = participants - n_distinct(df$person_id),
+                                     "Observations" = nrow(df),
+                                     "Observations_excluded" = observations - nrow(df)))
+
+```
+
+```{r}
+# 6 and 7 (heart rate exclusion)
+participants <- n_distinct(df$person_id)
+observations <- nrow(df)
+
+df <- df %>%
+    filter(avg_hr >= 20 & avg_hr <= 220)
+
+table_exclusions <- rbind(table_exclusions, 
+                          data.frame("Cohort" = "All avg_hr >= 20 and <= 220 bpm", 
+                                     "Participants" = n_distinct(df$person_id),
+                                     "Participants_excluded" = participants - n_distinct(df$person_id),
+                                     "Observations" = nrow(df),
+                                     "Observations_excluded" = observations - nrow(df)))
+```
+
+```{r}
+# 8 and 9 (dhrps exclusion)
+three_sd_above_mean = mean(df$dhrps) + 3 * sd(df$dhrps)
+three_sd_below_mean = mean(df$dhrps) - 3 * sd(df$dhrps)
+
+participants <- n_distinct(df$person_id)
+observations <- nrow(df)
+
+df <- df %>%
+    filter(dhrps >= three_sd_below_mean & dhrps <= three_sd_above_mean)
+
+table_exclusions <- rbind(table_exclusions, 
+                          data.frame("Cohort" = "All DHRPS within three sd of mean", 
+                                     "Participants" = n_distinct(df$person_id),
+                                     "Participants_excluded" = participants - n_distinct(df$person_id),
+                                     "Observations" = nrow(df),
+                                     "Observations_excluded" = observations - nrow(df)))
+```
+
+```{r}
+# 10 (wear time exclusion)
+participants <- n_distinct(df$person_id)
+observations <- nrow(df)
+
+df <- df %>%
+    filter(wear_time_minutes >= 16*60)
+
+table_exclusions <- rbind(table_exclusions, 
+                          data.frame("Cohort" = "All wear count >= 16 hours", 
+                                     "Participants" = n_distinct(df$person_id),
+                                     "Participants_excluded" = participants - n_distinct(df$person_id),
+                                     "Observations" = nrow(df),
+                                     "Observations_excluded" = observations - nrow(df)))
+```
+
+```{r}
+table_exclusions
+```
+
+## Processing
+
+Fitbit timing variables:
+
+```{r}
+df <- df %>%
+    group_by(person_id) %>%
+    mutate(
+        date_first_fitbit = min(date, na.rm = TRUE),
+        date_last_fitbit = max(date, na.rm = TRUE),
+        fitbit_duration = as.numeric(date_last_fitbit - date_first_fitbit)
+    ) %>%
+    ungroup()
+```
+
+Time variables:
+
+```{r}
+df <- df %>%
+    mutate(
+        date_t0 = date_first_fitbit,
+        date_tw = date_first_fitbit + days(6),
+        date_tm = date_first_fitbit + days(29),
+        date_ts = date_first_fitbit + days(179),
+        date_ty = date_first_fitbit + days(364),
+        date_t0_washout = date_t0 + days(14),
+        date_tw_washout = date_tw + days(14),
+        date_tm_washout = date_tm + days(14),
+        date_ts_washout = date_ts + days(14),
+        date_ty_washout = date_ty + days(14)
+    )
+```
+
+Save as per person dataframe:
+
+```{r}
+df_per_pid <- df %>%
+    group_by(person_id) %>%
+    summarise(
+        # covariates
+        date_of_birth = first(date_of_birth),
+        sex = first(sex),
+        race_eth = first(race_eth),
+        alcohol = first(alcohol),
+        smoking = first(smoking),
+        income = first(income),
+        bmi_cat = first(bmi_cat),
+        wear_status = first(wear_status),
+        
+        # timing variables
+        date_first_fitbit = first(date_first_fitbit),
+        date_last_fitbit = first(date_last_fitbit),
+        fitbit_duration = first(fitbit_duration),
+        date_first_ehr = first(date_first_ehr),
+        date_last_ehr = first(date_last_ehr),
+        date_last_aou = as.Date("2023-10-01"),
+        date_t0 = first(date_t0),
+        date_tw = first(date_tw),
+        date_tm = first(date_tm),
+        date_ts = first(date_ts),
+        date_ty = first(date_ty),
+        date_t0_washout = first(date_t0_washout),
+        date_tw_washout = first(date_tw_washout),
+        date_tm_washout = first(date_tm_washout),
+        date_ts_washout = first(date_ts_washout),
+        date_ty_washout = first(date_ty_washout),
+        age_last_aou = first(age_last_aou)
+    ) %>%
+    ungroup()
+```
+
+```{r}
+df_per_pid <- df_per_pid %>%
+    mutate(
+        fitbit_week = ifelse(fitbit_duration >= 7, 1, 0),
+        fitbit_month = ifelse(fitbit_duration >= 30, 1, 0),
+        fitbit_six = ifelse(fitbit_duration >= 180, 1, 0),
+        fitbit_year = ifelse(fitbit_duration >= 365, 1, 0),
+        age_t0 = as.numeric(date_t0 - date_of_birth) / 365.25
+    )
+```
+
+## Phenotypes
+
+```{r}
+metrics <- c("steps", "cadence1", "cadence30", "dhrps")
+
+time_periods <- list(
+    day = list(
+        filter_fn = function(df) filter(df, date == date_t0),
+        prefix = "day"
+    ),
+    day_washout = list(
+        filter_fn = function(df) filter(df, date == date_t0_washout),
+        prefix = "day",
+        suffix = "_washout"
+    ),
+    week = list(
+        filter_fn = function(df) filter(df, date >= date_t0 & date < date_tw),
+        prefix = "week"
+    ),
+    week_washout = list(
+        filter_fn = function(df) filter(df, date >= date_t0_washout & date < date_tw_washout),
+        prefix = "week",
+        suffix = "_washout"
+    ),
+    month = list(
+        filter_fn = function(df) filter(df, date >= date_t0 & date < date_tm),
+        prefix = "month"
+    ),
+    month_washout = list(
+        filter_fn = function(df) filter(df, date >= date_t0_washout & date < date_tm_washout),
+        prefix = "month",
+        suffix = "_washout"
+    ),
+    six = list(
+        filter_fn = function(df) filter(df, date >= date_t0 & date < date_ts),
+        prefix = "six"
+    ),
+    six_washout = list(
+        filter_fn = function(df) filter(df, date >= date_t0_washout & date < date_ts_washout),
+        prefix = "six",
+        suffix = "_washout"
+    ),
+    year = list(
+        filter_fn = function(df) filter(df, date >= date_t0 & date < date_ty),
+        prefix = "year"
+    ),
+    year_washout = list(
+        filter_fn = function(df) filter(df, date >= date_t0_washout & date < date_ty_washout),
+        prefix = "year",
+        suffix = "_washout"
+    )
+)
+
+for (period_name in names(time_periods)) {
+    period <- time_periods[[period_name]]
+    suffix <- if (!is.null(period$suffix)) period$suffix else ""
+  
+    for (metric in metrics) {
+        col_name <- paste0(period$prefix, "_", metric, suffix)
+        q_name <- paste0(col_name, "_q")
+        
+        temp_df <- df %>%
+        group_by(person_id) %>%
+        period$filter_fn() %>%
+        summarise(!!col_name := mean(.data[[metric]], na.rm = TRUE), .groups = "drop") %>%
+        mutate(!!q_name := ntile(.data[[col_name]], 4))
+
+        df_per_pid <- df_per_pid %>% left_join(temp_df, by = "person_id")
+    }
+}
+```
+
+Save to the bucket:
+
+```{r}
+write_csv(df, file = "df.csv")
+saveRDS(df, "df.rds")
+
+system2("gcloud",
+        args = c("storage", "cp", "df.csv", paste0(WORKSPACE_BUCKET, "/dataframes/")),
+        stdout = TRUE,
+        stderr = TRUE)
+system2("gcloud",
+        args = c("storage", "cp", "df.rds", paste0(WORKSPACE_BUCKET, "/dataframes/")),
+        stdout = TRUE,
+        stderr = TRUE)
+
+write_csv(df_per_pid, file = "df_per_pid.csv")
+saveRDS(df_per_pid, "df_per_pid.rds")
+
+system2("gcloud",
+        args = c("storage", "cp", "df_per_pid.csv", paste0(WORKSPACE_BUCKET, "/dataframes/")),
+        stdout = TRUE,
+        stderr = TRUE)
+system2("gcloud",
+        args = c("storage", "cp", "df_per_pid.rds", paste0(WORKSPACE_BUCKET, "/dataframes/")),
+        stdout = TRUE,
+        stderr = TRUE)
+```
+
+Save a version of the per PID dataframe for use in pheTK (all covariates must be saved as numeric variables):
+
+```{r}
+df_per_pid_phetk <- df_per_pid %>%
+  mutate(across(
+    c(sex, race_eth, alcohol, smoking, income, wear_status, bmi_cat),
+    ~ as.integer(as.factor(.))
+  ))
+
+write_excel_csv(df_per_pid_phetk, 'df_per_pid_phetk.csv')
+system2("gcloud",
+        args = c("storage", "cp", "df_per_pid_phetk.csv", paste0(WORKSPACE_BUCKET, "/dataframes/")),
+        stdout = TRUE,
+        stderr = TRUE)
+```
