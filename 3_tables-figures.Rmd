@@ -1,0 +1,4335 @@
+# Background and use
+
+This notebook is used to create all tables and figures for this analysis.
+
+The following notebooks should be run prior to running the present notebook:
+
+-   1_data-import
+-   1_PheWAS
+-   2_PheWAS-sensitivity
+
+# Setup
+
+Install and load in necessary packages:
+
+```{r}
+install.packages("pacman")
+pacman::p_load(
+    jsonlite,
+    table1,
+    tidyverse,
+    ggcorrplot,
+    tidygraph,
+    igraph,
+    ggraph,
+    irr,
+    patchwork,
+    ggVennDiagram,
+    plotly,
+    RColorBrewer,
+    cvAUC,
+    pROC,
+    scales,
+    ggrepel,
+    UpSetR,
+    ggtext,
+    openxlsx,
+    writexl
+)
+```
+
+Define environmental variables:
+
+```{r}
+library(jsonlite)
+
+wb <- function(...) fromJSON(system(paste("wb", ..., "--format=json"), intern = TRUE))
+
+workspace <- wb("workspace describe")
+GOOGLE_CLOUD_PROJECT <- workspace$googleProjectId
+
+resources <- wb("resource list")
+
+# WORKSPACE_BUCKET
+bucket_row <- resources[resources$resourceType == "GCS_BUCKET" &
+                        grepl("workspace-bucket", resources$id) &
+                        !grepl("temporary", resources$id), ]
+WORKSPACE_BUCKET <- paste0("gs://", bucket_row$bucketName[1])
+
+# WORKSPACE_CDR
+bq <- resources[resources$resourceType %in% c("BQ_DATASET", "BIGQUERY_DATASET"), ]
+cdr_row <- bq[grepl("^C\\d{4}Q\\d+R\\d+$", bq$datasetId), ]
+WORKSPACE_CDR <- paste0(cdr_row$projectId[1], ".", cdr_row$datasetId[1])
+
+# Summary
+for (var in c("GOOGLE_CLOUD_PROJECT", "WORKSPACE_BUCKET", "WORKSPACE_CDR")) {
+  val <- get(var)
+  cat(var, ":", if (length(val) && nzchar(val)) val else "NOT FOUND", "\n")
+}
+```
+
+Load in the data:
+
+```{r}
+# Main dataframe
+df_per_pid <- readRDS('~/workspace/Data from All of Us Controlled Tier /workspace-bucket/dataframes/df_per_pid.rds')
+df <- readRDS('~/workspace/Data from All of Us Controlled Tier /workspace-bucket/dataframes/df.rds')
+
+# PheWAS results - logistic regression
+logistic_day_steps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_day_steps.tsv")
+logistic_week_steps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_week_steps.tsv")
+logistic_month_steps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_month_steps.tsv")
+logistic_six_steps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_six_steps.tsv")
+logistic_year_steps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_year_steps.tsv")
+
+logistic_day_cadence1 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_day_cadence1.tsv")
+logistic_week_cadence1 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_week_cadence1.tsv")
+logistic_month_cadence1 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_month_cadence1.tsv")
+logistic_six_cadence1 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_six_cadence1.tsv")
+logistic_year_cadence1 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_year_cadence1.tsv")
+
+logistic_day_cadence30 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_day_cadence30.tsv")
+logistic_week_cadence30 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_week_cadence30.tsv")
+logistic_month_cadence30 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_month_cadence30.tsv")
+logistic_six_cadence30 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_six_cadence30.tsv")
+logistic_year_cadence30 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_year_cadence30.tsv")
+
+logistic_day_dhrps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_day_dhrps.tsv")
+logistic_week_dhrps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_week_dhrps.tsv")
+logistic_month_dhrps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_month_dhrps.tsv")
+logistic_six_dhrps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_six_dhrps.tsv")
+logistic_year_dhrps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_logistic_year_dhrps.tsv")
+
+# PheWAS results - cox regression
+cox_day_steps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_day_steps.tsv")
+cox_week_steps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_week_steps.tsv")
+cox_month_steps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_month_steps.tsv")
+cox_six_steps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_six_steps.tsv")
+cox_year_steps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_year_steps.tsv")
+
+cox_day_cadence1 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_day_cadence1.tsv")
+cox_week_cadence1 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_week_cadence1.tsv")
+cox_month_cadence1 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_month_cadence1.tsv")
+cox_six_cadence1 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_six_cadence1.tsv")
+cox_year_cadence1 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_year_cadence1.tsv")
+
+cox_day_cadence30 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_day_cadence30.tsv")
+cox_week_cadence30 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_week_cadence30.tsv")
+cox_month_cadence30 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_month_cadence30.tsv")
+cox_six_cadence30 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_six_cadence30.tsv")
+cox_year_cadence30 <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_year_cadence30.tsv")
+
+cox_day_dhrps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_day_dhrps.tsv")
+cox_week_dhrps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_week_dhrps.tsv")
+cox_month_dhrps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_month_dhrps.tsv")
+cox_six_dhrps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_six_dhrps.tsv")
+cox_year_dhrps <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results/phewas_cox_year_dhrps.tsv")
+```
+
+Create combined dataframes for prevalent and incident associations:
+
+```{r}
+logistic_combined <- bind_rows(
+    mutate(logistic_day_steps, metric = "steps", time = "Day"),
+    mutate(logistic_week_steps, metric = "steps", time = "Week"),
+    mutate(logistic_month_steps, metric = "steps", time = "Month"),
+    mutate(logistic_six_steps, metric = "steps", time = "Six months"),
+    mutate(logistic_year_steps, metric = "steps", time = "Year"),
+    
+    mutate(logistic_day_cadence1, metric = "cadence1", time = "Day"),
+    mutate(logistic_week_cadence1, metric = "cadence1", time = "Week"),
+    mutate(logistic_month_cadence1, metric = "cadence1", time = "Month"),
+    mutate(logistic_six_cadence1, metric = "cadence1", time = "Six months"),
+    mutate(logistic_year_cadence1, metric = "cadence1", time = "Year"),   
+
+    mutate(logistic_day_cadence30, metric = "cadence30", time = "Day"),
+    mutate(logistic_week_cadence30, metric = "cadence30", time = "Week"),
+    mutate(logistic_month_cadence30, metric = "cadence30", time = "Month"),
+    mutate(logistic_six_cadence30, metric = "cadence30", time = "Six months"),
+    mutate(logistic_year_cadence30, metric = "cadence30", time = "Year"), 
+
+    mutate(logistic_day_dhrps, metric = "dhrps", time = "Day"),
+    mutate(logistic_week_dhrps, metric = "dhrps", time = "Week"),
+    mutate(logistic_month_dhrps, metric = "dhrps", time = "Month"),
+    mutate(logistic_six_dhrps, metric = "dhrps", time = "Six months"),
+    mutate(logistic_year_dhrps, metric = "dhrps", time = "Year"),    
+) %>%
+    mutate(time = factor(time, levels = c("Year", "Six months", "Month", "Week", "Day")))
+
+cox_combined <- bind_rows(
+    mutate(cox_day_steps, metric = "steps", time = "Day"),
+    mutate(cox_week_steps, metric = "steps", time = "Week"),
+    mutate(cox_month_steps, metric = "steps", time = "Month"),
+    mutate(cox_six_steps, metric = "steps", time = "Six months"),
+    mutate(cox_year_steps, metric = "steps", time = "Year"),
+    
+    mutate(cox_day_cadence1, metric = "cadence1", time = "Day"),
+    mutate(cox_week_cadence1, metric = "cadence1", time = "Week"),
+    mutate(cox_month_cadence1, metric = "cadence1", time = "Month"),
+    mutate(cox_six_cadence1, metric = "cadence1", time = "Six months"),
+    mutate(cox_year_cadence1, metric = "cadence1", time = "Year"),   
+
+    mutate(cox_day_cadence30, metric = "cadence30", time = "Day"),
+    mutate(cox_week_cadence30, metric = "cadence30", time = "Week"),
+    mutate(cox_month_cadence30, metric = "cadence30", time = "Month"),
+    mutate(cox_six_cadence30, metric = "cadence30", time = "Six months"),
+    mutate(cox_year_cadence30, metric = "cadence30", time = "Year"), 
+
+    mutate(cox_day_dhrps, metric = "dhrps", time = "Day"),
+    mutate(cox_week_dhrps, metric = "dhrps", time = "Week"),
+    mutate(cox_month_dhrps, metric = "dhrps", time = "Month"),
+    mutate(cox_six_dhrps, metric = "dhrps", time = "Six months"),
+    mutate(cox_year_dhrps, metric = "dhrps", time = "Year"),    
+) %>%
+    mutate(time = factor(time, levels = c("Year", "Six months", "Month", "Week", "Day")))
+```
+
+Set variables that will be used:
+
+```{r}
+# Bonferroni corrections (note: could use any metric here, steps shown here)
+alpha_logistic = 0.05 / nrow(logistic_day_steps)
+alpha_cox_day = 0.05 / nrow(cox_day_steps)
+alpha_cox_week = 0.05 / nrow(cox_week_steps)
+alpha_cox_month = 0.05 / nrow(cox_month_steps)
+alpha_cox_six = 0.05 / nrow(cox_six_steps)
+alpha_cox_year = 0.05 / nrow(cox_year_steps)
+
+periods  <- c("day", "week", "month", "six", "year")
+metrics <- c("steps", "cadence1", "cadence30", "dhrps")
+```
+
+Pull the top 15 most significant phecodes from the logistic regression PheWAS results and the top 15 most significant phecodes from the cox regression PheWAS results:
+
+*More specific phecodes replace less specific phecodes - e.g., if both Overweight and obesity (EM_236) and Obesity (EM_236.1) are in the top 15, EM_236.1 will be included over EM_236*
+
+```{r}
+logistic_phecodes <- logistic_combined %>%
+    arrange(p_value) %>%
+    distinct(phecode, .keep_all = TRUE) %>%
+    pull(phecode)
+
+keep_logistic <- character(0)
+
+# Select 15 phecodes, but if a more specific phecode is added, remove the less specific one
+for(i in seq_along(logistic_phecodes)) {
+    if(length(keep_logistic) >= 15) break
+    
+    current <- logistic_phecodes[i]
+    
+    more_specific_check <- which(startsWith(current, keep_logistic) & nchar(current) > nchar(keep_logistic))
+    
+    if (length(more_specific_check) > 0) {
+        keep_logistic <- keep_logistic[-more_specific_check]
+        keep_logistic <- c(keep_logistic, current)
+    } else {
+        less_specific <- any(startsWith(keep_logistic, current) & nchar(keep_logistic) > nchar(current))
+        
+        if (!less_specific) {
+            keep_logistic <- c(keep_logistic, current)
+        }
+    }
+}
+
+cox_phecodes <- cox_combined %>%
+    arrange(p_value) %>%
+    distinct(phecode, .keep_all = TRUE) %>%
+    pull(phecode)
+
+keep_cox <- character(0)
+
+# Select 15 phecodes, but if a more specific phecode is added, remove the less specific one
+for(i in seq_along(cox_phecodes)) {
+    if(length(keep_cox) >= 15) break
+    
+    current <- cox_phecodes[i]
+    
+    more_specific_check <- which(startsWith(current, keep_cox) & nchar(current) > nchar(keep_cox))
+    
+    if (length(more_specific_check) > 0) {
+        keep_cox <- keep_cox[-more_specific_check]
+        keep_cox <- c(keep_cox, current)
+    } else {
+        less_specific <- any(startsWith(keep_cox, current) & nchar(keep_cox) > nchar(current))
+        
+        if (!less_specific) {
+            keep_cox <- c(keep_cox, current)
+        }
+    }
+}
+
+# Filter to top associations
+logistic_combined_top <- logistic_combined %>%
+    filter(phecode %in% keep_logistic | phecode %in% keep_cox)
+
+cox_combined_top <- cox_combined %>%
+    filter(phecode %in% keep_cox | phecode %in% keep_logistic)
+
+# Remove trailing * from phecode_string
+logistic_combined_top <- logistic_combined_top %>%
+    mutate(phecode_string = sub("\\*+$", "", phecode_string))
+
+cox_combined_top <- cox_combined_top %>%
+    mutate(phecode_string = sub("\\*+$", "", phecode_string))
+```
+
+# Figures
+
+These are presented in the same order as the corresponding manuscript.
+
+## Figure 1 - Overview of study design
+
+This figure was made in Microsoft Powerpoint.
+
+## Supplementary Figure 1 - Flow diagram
+
+This figure was made using draw.io
+
+## Supplementary Figure 2
+
+### 2a - Correlogram
+
+Create correlation matrix for all phenotypes:
+
+```{r}
+cor_matrix <- round(cor(df_per_pid[, c("day_steps", 
+                                "week_steps", 
+                                "month_steps", 
+                                "six_steps",
+                                "year_steps",
+                                "day_cadence1",
+                                "week_cadence1",
+                                "month_cadence1",
+                                "six_cadence1",
+                                "year_cadence1",
+                                "day_cadence30",
+                                "week_cadence30",
+                                "month_cadence30", 
+                                "six_cadence30", 
+                                "year_cadence30",
+                                "day_dhrps", 
+                                "week_dhrps", 
+                                "month_dhrps",
+                                "six_dhrps",
+                                "year_dhrps")],
+                           method = "pearson",
+                           use = "complete.obs"), 2)
+
+colnames(cor_matrix) <- c("Day - step count", 
+                          "Week - step count", 
+                          "Month - step count", 
+                          "Six Months - step count",
+                          "Year - step count",
+                          "Day - 1-min cadence", 
+                          "Week - 1-min cadence", 
+                          "Month - 1-min cadence", 
+                          "Six Months - 1-min cadence",
+                          "Year - 1-min cadence",
+                          "Day - 30-min cadence", 
+                          "Week - 30-min cadence", 
+                          "Month - 30-min cadence", 
+                          "Six Months - 30-min cadence",
+                          "Year - 30-min cadence",
+                          "Day - DHRPS", 
+                          "Week - DHRPS", 
+                          "Month - DHRPS", 
+                          "Six Months - DHRPS",
+                          "Year - DHRPS")
+rownames(cor_matrix) <- c("Day - step count", 
+                          "Week - step count", 
+                          "Month - step count", 
+                          "Six Months - step count",
+                          "Year - step count",
+                          "Day - 1-min cadence", 
+                          "Week - 1-min cadence", 
+                          "Month - 1-min cadence", 
+                          "Six Months - 1-min cadence",
+                          "Year - 1-min cadence",
+                          "Day - 30-min cadence", 
+                          "Week - 30-min cadence", 
+                          "Month - 30-min cadence", 
+                          "Six Months - 30-min cadence",
+                          "Year - 30-min cadence",
+                          "Day - DHRPS", 
+                          "Week - DHRPS", 
+                          "Month - DHRPS", 
+                          "Six Months - DHRPS",
+                          "Year - DHRPS")
+```
+
+Create correlogram:
+
+```{r}
+correlogram <- ggcorrplot(cor_matrix, 
+                          method = "square",
+                          type = "lower",
+                          lab = TRUE,
+                          lab_size = 2.5,
+                          insig = "blank",
+                          show.legend = TRUE
+                         ) + 
+    scale_fill_gradient2(
+        low = "#6D9EC1", high = "#E46726", mid = "white",
+        midpoint = 0, limit = c(-1, 1), space = "Lab",
+        name = "Pearson \ncorrelation \ncoefficient"
+    ) +
+    theme(axis.text.x = element_text(size = 12),
+          axis.text.y = element_text(size = 12),
+          legend.position.inside = c(0.3, 0.8),
+          legend.background = element_rect(fill = "white", color = NA),
+          legend.key.size = unit(0.5, "cm")
+         )
+
+correlogram
+```
+
+```{r}
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/correlogram.png", width = 8, height = 11, units = "in", res = 400)
+correlogram
+dev.off()
+```
+
+### 2b Knowledge graph
+
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+
+# Convert correlation matrix to edge list
+cor_df <- as.data.frame(as.table(cor_matrix)) %>%
+  rename(from = Var1, to = Var2, weight = Freq) %>%
+  filter(from != to)
+
+# Remove duplicate edges
+cor_df <- cor_df %>%
+    rowwise() %>%
+    mutate(pair = paste(sort(c(from, to)), collapse = "_")) %>%
+    ungroup() %>%
+    distinct(pair, .keep_all = TRUE) %>%
+    select(from, to, weight)
+
+# Square weights to emphasize strong correlations
+cor_df$weight <- (abs(cor_df$weight))^2
+
+# Build nodes
+nodes <- data.frame(name = unique(c(cor_df$from, cor_df$to))) %>%
+  mutate(type = case_when(
+    grepl("step count", name) ~ "Step count",
+    grepl("1-min cadence", name) ~ "1-min cadence",
+    grepl("30-min cadence", name) ~ "30-min cadence",
+    grepl("DHRPS", name) ~ "DHRPS"
+  ))
+
+# Build graph
+graph <- tidygraph::tbl_graph(nodes = nodes, edges = cor_df, directed = FALSE)
+
+# Plot using ggraph
+knowledge <- ggraph(graph, layout = "fr") +
+    geom_edge_link(aes(width = weight, alpha = weight), color = "gray50") +
+    geom_node_point(aes(color = type), size = 5) +
+    geom_node_text(aes(label = name), repel = TRUE, size = 3) +
+    scale_edge_width(range = c(0.2, 2), name = "Similarity Strength") +
+    scale_edge_alpha(range = c(0.1, 0.8), guide = "none") +
+    scale_color_brewer(palette = "Set2", name = "Variable Type") +
+    theme_void()
+
+knowledge
+```
+
+```{r}
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/knowledge.png", width = 8, height = 6, units = "in", res = 400)
+knowledge
+dev.off()
+```
+
+### 2c - ICC plots
+
+Calculate ICC for each metric:
+
+```{r}
+# Step count
+icc_values_steps <- sapply(1:60, function(J) {
+  message(sprintf("Computing ICC for J = %d", J))
+  result <- compute_icc(df, J = J, metric = sum_steps, seed = 1000 + J)
+  message(sprintf("Finished J = %d", J))
+  result
+})
+
+icc_results_steps <- data.frame(J = 1:60, ICC = icc_values_steps)
+
+saveRDS(icc_results_steps, "icc_results_steps.rds")
+system2("gcloud",
+        args = c("storage", "cp", "icc_results_steps.rds", paste0(WORKSPACE_BUCKET, "/icc_results/")),
+        stdout = TRUE,
+        stderr = TRUE)
+
+# Peak 1-min cadence
+icc_values_cadence1 <- sapply(1:60, function(J) {
+  message(sprintf("Computing ICC for J = %d", J))
+  result <- compute_icc(df, J = J, metric = peak_min_cadence, seed = 1000 + J)
+  message(sprintf("Finished J = %d", J))
+  result
+})
+
+icc_results_cadence1 <- data.frame(J = 1:60, ICC = icc_values_cadence1)
+
+saveRDS(icc_results_cadence1, "icc_results_cadence1.rds")
+system2("gcloud",
+        args = c("storage", "cp", "icc_results_cadence1.rds", paste0(WORKSPACE_BUCKET, "/icc_results/")),
+        stdout = TRUE,
+        stderr = TRUE)
+
+# Peak 30-min cadence
+icc_values_cadence30 <- sapply(1:60, function(J) {
+  message(sprintf("Computing ICC for J = %d", J))
+  result <- compute_icc(df, J = J, metric = mean_peak_30_min_cadence, seed = 1000 + J)
+  message(sprintf("Finished J = %d", J))
+  result
+})
+
+icc_results_cadence30 <- data.frame(J = 1:60, ICC = icc_values_cadence30)
+
+saveRDS(icc_results_cadence30, "icc_results_cadence30.rds")
+system2("gcloud",
+        args = c("storage", "cp", "icc_results_cadence30.rds", paste0(WORKSPACE_BUCKET, "/icc_results/")),
+        stdout = TRUE,
+        stderr = TRUE)
+
+# Daily heart rate per step
+icc_values_dhrps <- sapply(1:60, function(J) {
+  message(sprintf("Computing ICC for J = %d", J))
+  result <- compute_icc(df, J = J, metric = dhrps, seed = 1000 + J)
+  message(sprintf("Finished J = %d", J))
+  result
+})
+
+icc_results_dhrps <- data.frame(J = 1:60, ICC = icc_values_dhrps)
+
+saveRDS(icc_results_dhrps, "icc_results_dhrps.rds")
+system2("gcloud",
+        args = c("storage", "cp", "icc_results_dhrps.rds", paste0(WORKSPACE_BUCKET, "/icc_results/")),
+        stdout = TRUE,
+        stderr = TRUE)
+```
+
+See the minimum and maximum ICC values for each metric:
+
+```{r}
+icc_results_steps %>%
+    filter(ICC == max(ICC))
+
+icc_results_steps %>%
+    filter(ICC == min(ICC))
+
+icc_results_cadence1 %>%
+    filter(ICC == max(ICC))
+
+icc_results_cadence1 %>%
+    filter(ICC == min(ICC))
+
+icc_results_cadence30 %>%
+    filter(ICC == max(ICC))
+
+icc_results_cadence30 %>%
+    filter(ICC == min(ICC))
+
+icc_results_dhrps %>%
+    filter(ICC == max(ICC))
+
+icc_results_dhrps %>%
+    filter(ICC == min(ICC))
+```
+
+Plot each metric:
+
+```{r}
+icc_steps <- ggplot(data = icc_results_steps, aes(x = J, y = ICC)) +
+    geom_line() +
+    geom_point() +
+    geom_vline(xintercept = 7, linetype = "dashed", color = "blue") +
+    theme_minimal() +
+    labs(title = "Step count", x = "Number of days")
+
+icc_cadence1 <- ggplot(data = icc_results_cadence1, aes(x = J, y = ICC)) +
+    geom_line() +
+    geom_point() +
+    geom_vline(xintercept = 7, linetype = "dashed", color = "blue") +
+    theme_minimal() +
+    labs(title = "Peak 1-min cadence", x = "Number of days")
+
+icc_cadence30 <- ggplot(data = icc_results_cadence30, aes(x = J, y = ICC)) +
+    geom_line() +
+    geom_point() +
+    geom_vline(xintercept = 7, linetype = "dashed", color = "blue") +
+    theme_minimal() +
+    labs(title = "Peak 30-min cadence", x = "Number of days")
+
+icc_dhrps <- ggplot(data = icc_results_dhrps, aes(x = J, y = ICC)) +
+    geom_line() +
+    geom_point() +
+    geom_vline(xintercept = 7, linetype = "dashed", color = "blue") +
+    theme_minimal() +
+    labs(title = "Daily heart rate per step", x = "Number of days")
+```
+
+Combine into one plot:
+
+```{r}
+common_y_limits <- c(0, 1)
+
+icc_steps     <- icc_steps     + coord_cartesian(ylim = common_y_limits)
+icc_cadence1  <- icc_cadence1  + coord_cartesian(ylim = common_y_limits)
+icc_cadence30 <- icc_cadence30 + coord_cartesian(ylim = common_y_limits)
+icc_dhrps     <- icc_dhrps     + coord_cartesian(ylim = common_y_limits)
+
+theme_no_y <- theme(
+  axis.title.y = element_blank(),
+  axis.text.y  = element_blank(),
+  axis.ticks.y = element_blank()
+)
+
+icc_cadence1  <- icc_cadence1  + theme_no_y
+icc_cadence30 <- icc_cadence30 + theme_no_y
+icc_dhrps     <- icc_dhrps     + theme_no_y
+
+icc <- (
+  icc_steps + icc_cadence1 + icc_cadence30 + icc_dhrps
+) +
+  plot_layout(ncol = 4, guides = "collect")
+
+icc
+```
+
+```{r}
+icc_block <- wrap_elements(full = icc)  # treat ICC (4-panel) as one plot
+
+figure2 <- (correlogram + knowledge) /
+  (plot_spacer() + icc_block + plot_spacer() +
+     plot_layout(widths = c(0.01, 2, 0.01))) +
+  plot_annotation(tag_levels = "a")
+```
+
+```{r}
+png(filename = '~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/figure2.png', width = 15, height = 15, units = "in", res = 300)
+figure2
+dev.off()
+```
+
+## Supplementary Figure 3 - Sankey diagrams
+
+```{r}
+sankeys <- vector("list", length(metrics))
+names(sankeys) <- metrics
+
+for (m in metrics) {
+  day   <- paste0("day_",   m, "_q")
+  week  <- paste0("week_",  m, "_q")
+  month <- paste0("month_", m, "_q")
+  six   <- paste0("six_",   m, "_q")
+  year  <- paste0("year_",  m, "_q")
+
+  df_per_pid_sankey <- df_per_pid %>%
+    filter(!is.na(.data[[day]]),
+           !is.na(.data[[week]]),
+           !is.na(.data[[month]]),
+           !is.na(.data[[six]]),
+           !is.na(.data[[year]]))
+
+  transitions <- bind_rows(
+    df_per_pid_sankey %>% count(source = paste0("day_Q",          .data[[day]]),
+                        target = paste0("week_Q",         .data[[week]]),  name = "n"),
+    df_per_pid_sankey %>% count(source = paste0("week_Q",         .data[[week]]),
+                        target = paste0("month_Q",        .data[[month]]), name = "n"),
+    df_per_pid_sankey %>% count(source = paste0("month_Q",        .data[[month]]),
+                        target = paste0("six_months_Q",   .data[[six]]),   name = "n"),
+    df_per_pid_sankey %>% count(source = paste0("six_months_Q",   .data[[six]]),
+                        target = paste0("year_Q",         .data[[year]]),  name = "n")
+  )
+
+  nodes <- data.frame(name = unique(c(transitions$source, transitions$target)))
+  nodes$index <- 0:(nrow(nodes) - 1)
+
+  transitions <- transitions %>%
+    left_join(nodes, by = c("source" = "name")) %>%
+    rename(source_id = index) %>%
+    left_join(nodes, by = c("target" = "name")) %>%
+    rename(target_id = index)
+
+  palette <- brewer.pal(n = 4, name = "BuPu")
+  node_colors <- rep(palette, length.out = nrow(nodes))
+
+  sankeys[[m]] <- plot_ly(
+    type = "sankey",
+    orientation = "h",
+    node = list(
+      label = nodes$name,
+      pad = 15,
+      thickness = 20,
+      font = list(size = 5),
+      color = node_colors
+    ),
+    link = list(
+      source = transitions$source_id,
+      target = transitions$target_id,
+      value = transitions$n
+    )
+  )
+}
+
+sankeys$steps
+sankeys$cadence1
+sankeys$cadence30
+sankeys$dhrps
+```
+
+## Figure 2
+
+### 2a - Volcano plot (step count)
+
+```{r}
+# Save dataframe for volcano plot
+volcano <- logistic_combined %>%
+  filter(metric == "steps", time == "Year") %>%
+  select(phecode_string, odds_ratio, p_value, phecode_category) %>%
+  mutate(
+    logp = -log10(p_value),
+    sig  = p_value < alpha_logistic
+  )
+
+# Select phecodes to label
+top_neg <- volcano %>%
+  filter(odds_ratio < 1) %>%
+  arrange(p_value) %>%
+  slice_head(n = 15)
+
+top_pos <- volcano %>%
+  filter(odds_ratio > 1) %>%
+  arrange(p_value) %>%
+  slice_head(n = 2)
+
+novel_labels <- c(
+  "Asthma",
+  "Headache",
+  "Asphyxia and hypoxemia",
+  "Chronic pain syndrome",
+  "Disorders of autonomic nervous system",
+  "Benign neoplasm of the skin"
+)
+
+novel_df <- volcano %>%
+  filter(phecode_string %in% novel_labels)
+
+label_df <- bind_rows(top_neg, top_pos, novel_df) %>%
+  distinct(phecode_string, .keep_all = TRUE)
+
+# Plot
+steps_volcano <- ggplot(volcano, aes(x = odds_ratio, y = logp, color = phecode_category)) +
+    geom_point(size = 3, alpha = 0.6) +
+    scale_colour_manual(values = c("#FBE183",
+                                   "#F4C40F",
+                                   "#FE9B00",
+                                   "#F97306",
+                                   "#D8443C",
+                                   "#9B3441",
+                                   "#DE597C",
+                                   "#E87B89",
+                                   "#E6A2A6",
+                                   "#AA7AA1",
+                                   "#9F5691",
+                                   "#633372",
+                                   "#3B3B98",
+                                   "#1F6E9C",
+                                   "#2B9B81",
+                                   "#2E8B57",
+                                   "#92C051")) +
+    geom_vline(xintercept = 1, linetype = "solid") +
+    geom_hline(yintercept = 0, linetype = "solid") +
+    geom_hline(yintercept = -log10(alpha_logistic), linetype = "dashed", color = "black") +
+    geom_text_repel(
+        data = label_df,
+        aes(label = phecode_string),
+        size = 5,
+        max.overlaps = Inf
+    ) +
+    scale_x_log10() +
+    labs(
+        x = "OR (per 1,000 step increase)",
+        y = "-log10(p-value)",
+        color = "Phecode category"
+    ) +
+    theme_minimal()
+
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/steps_volcano.png", width = 12, height = 10, units = "in", res = 400)
+steps_volcano
+dev.off()
+
+steps_volcano
+```
+
+### 2b - Metric correlation plots
+
+Pull the year association for each metric:
+
+```{r}
+steps_df <- logistic_combined %>%
+  filter(metric == "steps", time == "Year") %>%
+  select(phecode, or_steps = beta, p_steps = p_value)
+
+cadence1_df <- logistic_combined %>%
+  filter(metric == "cadence1", time == "Year") %>%
+  select(phecode, or_cadence1 = beta, p_cadence1 = p_value)
+
+cadence30_df <- logistic_combined %>%
+  filter(metric == "cadence30", time == "Year") %>%
+  select(phecode, or_cadence30 = beta, p_cadence30 = p_value)
+
+dhrps_df <- logistic_combined %>%
+  filter(metric == "dhrps", time == "Year") %>%
+  select(phecode, or_dhrps = beta, p_dhrps = p_value)
+```
+
+Make scatterplots comparing step count to all other metrics:
+
+```{r}
+# steps x cadence1
+steps_cadence1 <- steps_df %>%
+  inner_join(cadence1_df, by = "phecode") %>%
+  mutate(
+    sig_category = factor(
+      case_when(
+        p_steps < alpha_logistic & p_cadence1 < alpha_logistic ~ "Both",
+        p_steps < alpha_logistic                      ~ "Step count only",
+        p_cadence1 < alpha_logistic                   ~ "Peak 1-min cadence only",
+        TRUE                                 ~ "Neither"
+      ),
+      levels = c("Both", "Step count only", "Peak 1-min cadence only", "Neither")
+    )
+  )
+
+r <- cor(steps_cadence1$or_steps, steps_cadence1$or_cadence1, use = "complete.obs")
+
+steps_cadence1 <- ggplot(steps_cadence1, aes(x = or_steps, y = or_cadence1, color = sig_category)) +
+geom_point(
+  data = ~ subset(.x, sig_category == "Neither" | sig_category == "Both"),
+  alpha = 0.5
+) +
+geom_point(
+  data = ~ subset(.x, sig_category != "Neither" & sig_category != "Both"),
+  alpha = 0.7
+) +    geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  scale_color_manual(
+    values = c(
+      "Both" = "black",
+      "Step count only" = "#DE7A00FF",
+      "Peak 1-min cadence only" = "#860A4DFF",
+      "Neither" = "grey80"
+    )
+  ) +
+  labs(
+    x = "log(OR) - step count",
+    y = "log(OR) - peak 1-min cadence",
+    color = "Bonferroni significance",
+    title = paste0("Correlation: r = ", round(r, 3))
+  ) +
+    geom_hline(yintercept = 0, color = "black") +
+  geom_vline(xintercept = 0, color = "black") +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+# steps x cadence30
+steps_cadence30 <- steps_df %>%
+  inner_join(cadence30_df, by = "phecode") %>%
+  mutate(
+    sig_category = factor(
+      case_when(
+        p_steps < alpha_logistic & p_cadence30 < alpha_logistic ~ "Both",
+        p_steps < alpha_logistic                      ~ "Step count only",
+        p_cadence30 < alpha_logistic                   ~ "Peak 30-min cadence only",
+        TRUE                                 ~ "Neither"
+      ),
+      levels = c("Both", "Step count only", "Peak 30-min cadence only", "Neither")
+    )
+  )
+
+r <- cor(steps_cadence30$or_steps, steps_cadence30$or_cadence30, use = "complete.obs")
+
+steps_cadence30 <- ggplot(steps_cadence30, aes(x = or_steps, y = or_cadence30, color = sig_category)) +
+geom_point(
+  data = ~ subset(.x, sig_category == "Neither" | sig_category == "Both"),
+  alpha = 0.5
+) +
+geom_point(
+  data = ~ subset(.x, sig_category != "Neither" & sig_category != "Both"),
+  alpha = 0.7
+) +  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  scale_color_manual(
+    values = c(
+      "Both" = "black",
+      "Step count only" = "#DE7A00FF",
+      "Peak 30-min cadence only" = "#860A4DFF",
+      "Neither" = "grey80"
+    )
+  ) +
+  labs(
+    x = "log(OR) - step count",
+    y = "log(OR) - peak 30-min cadence",
+    color = "Bonferroni significance",
+    title = paste0("Correlation: r = ", round(r, 3))
+  ) +
+    geom_hline(yintercept = 0, color = "black") +
+  geom_vline(xintercept = 0, color = "black") +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+
+
+# steps x dhrps
+steps_dhrps <- steps_df %>%
+  inner_join(dhrps_df, by = "phecode") %>%
+  mutate(
+    sig_category = factor(
+      case_when(
+        p_steps < alpha_logistic & p_dhrps < alpha_logistic ~ "Both",
+        p_steps < alpha_logistic                      ~ "Step count only",
+        p_dhrps < alpha_logistic                   ~ "Daily heart rate per step only",
+        TRUE                                 ~ "Neither"
+      ),
+      levels = c("Both", "Step count only", "Daily heart rate per step only", "Neither")
+    )
+  )
+
+steps_dhrps <- steps_dhrps %>%
+    mutate(or_dhrps_aligned = -or_dhrps)
+
+r <- cor(steps_dhrps$or_steps, steps_dhrps$or_dhrps_aligned, use = "complete.obs")
+
+steps_dhrps <- ggplot(steps_dhrps, aes(x = or_steps, y = or_dhrps_aligned, color = sig_category)) +
+geom_point(
+  data = ~ subset(.x, sig_category == "Neither" | sig_category == "Both"),
+  alpha = 0.5
+) +
+geom_point(
+  data = ~ subset(.x, sig_category != "Neither" & sig_category != "Both"),
+  alpha = 0.7
+) +  geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+  scale_color_manual(
+    values = c(
+      "Both" = "black",
+      "Step count only" = "#DE7A00FF",
+      "Daily heart rate per step only" = "#860A4DFF",
+      "Neither" = "grey80"
+    )
+  ) +
+  labs(
+    x = "log(OR) - step count",
+    y = "log(OR) - daily heart rate per step",
+    color = "Bonferroni significance",
+    title = paste0("Correlation: r = ", round(r, 3))
+  ) +
+    geom_hline(yintercept = 0, color = "black") +
+  geom_vline(xintercept = 0, color = "black") +
+  theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank()
+  )
+```
+
+```{r}
+metric_corr <- steps_cadence1 / steps_cadence30 / steps_dhrps
+```
+
+```{r}
+metric_corr
+
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/metric_corr.png", width = 7, height = 10, units = "in", res = 400)
+metric_corr
+dev.off()
+```
+
+### Combine
+
+These figures were combined using Microsoft Powerpoint.
+
+## Supplementary Figures 4 and 5
+
+These figures were made in the following notebook: *2.1_PheWAS*
+
+## Supplementary Figure 6 - Upset plot
+
+```{r}
+# Paste list of significant variables for all studies
+lists <- list(
+  `Fulda - AOU` = c("Abdominal pain","Abnormal coagulation profile","Abnormal cytological findings in specimens from genital organs","Abnormal electrocardiogram [ECG] [EKG]","Abnormal findings on diagnostic imaging of lung","Abnormal findings on examination of blood","Abnormal glucose","Abnormal involuntary movements","Abnormal mammogram","Abnormal results of cardiovascular function studies","Abnormal results of pulmonary function studies","Abnormal weight gain","Abnormal weight loss","Abnormalities of breathing","Abnormalities of heart beat","Abnormality of gait","Abnormality of gait and mobility","Abnormality of the lymph nodes","Abnormality of urination","Acidosis","Acquired deformities of limbs","Acquired deformities of the ankle and foot","Actinic keratosis","Acute bronchitis","Acute cystitis","Acute kidney failure","Acute lower respiratory infection","Acute myocardial infarction","Acute pain","Acute posthemorrhagic anemia","Acute respiratory failure","Acute/subacute osteomyelitis","Adrenocortical insufficiency","Allergic rhinitis","Allergy","Allergy to antibiotic agent (excluding penicillin)","Allergy to narcotic agent","Allergy to other anti-infective agents","Allergy to sulfonamides","Alteration of consciousness","Altered mental status, unspecified","Anemia","Anemia secondary to chronic diseases and conditions","Angina pectoris","Anxiety and anxiety disorders","Aortic stenosis","Aortic valve disorders","Aphagia and dysphagia","Asphyxia and hypoxemia","Aspiration pneumonia","Asthma","Atherosclerosis [ASCVD]","Atherosclerosis of the extremities","Atrial fibrillation","Atrial fibrillation and flutter","Atrial flutter","Atrioventricular block","Attention-deficit hyperactivity disorders","Autoimmune disease","Back pain","Bacteremia","Bacteremia, Sepsis, and SIRS","Bacterial infections","Bacterial pneumonia","Benign neoplasm of the skin","Benign sarcoma-related cancers","Bipolar I disorder","Bipolar disorder","Borderline personality disorder","Bronchitis","Bursitis","Candidiasis","Candidiasis of skin and nails","Cardiac arrhythmia and conduction disorders","Cardiomegaly","Cardiomyopathy","Carpal tunnel syndrome","Cellulitis and abscess","Cerebral infarction [Ischemic stroke]","Cerebral palsy and other paralytic syndromes","Cervicalgia","Chest pain","Chronic atrial fibrillation*","Chronic bronchitis","Chronic fatigue syndrome","Chronic kidney disease","Chronic liver disease","Chronic migraine without aura","Chronic nonalcoholic liver disease","Chronic obstructive pulmonary disease [COPD]","Chronic pain","Chronic pain syndrome","Chronic respiratory failure","Chronic sinusitis","Chronic ulcer of skin","Chrystal arthropathies","Cirrhosis of liver","Clostridium","Clostridium difficile","Coagulation defects, purpura and other hemorrhagic conditions","Coma and other alteration of consciousness","Combined systolic and diastolic heart failure","Complex regional pain syndrome","Complications and ill-defined descriptions of heart disease","Congenital malformations of nervous system","Constipation","Convulsions","Coronary atherosclerosis [Atherosclerotic heart disease]","Coronavirus","Cough","Cramp and spasm","Current tobacco use and nicotine dependence","Cyst of kidney","Cystitis","Cystitis and urethritis","Deep vein thrombosis [DVT]","Deficiency anemias","Deforming dorsopathies","Degenerative disc disease","Dehydration","Demyelinating diseases of the central nervous system","Diabetes mellitus","Diabetes mellitus due to underlying condition*","Diabetic retinopathy","Diaphragmatic hernia","Diarrhea","Diastolic heart failure","Difficulty walking","Diffuse diseases of connective tissue","Dilated cardiomyopathy*","Diseases of esophagus","Disorder of ligament","Disorders and findings from impaired renal function","Disorders of adrenal glands","Disorders of autonomic nervous system","Disorders of calcium metabolism","Disorders of diaphragm","Disorders of fluid, electrolyte and acid-base balance","Disorders of magnesium metabolism","Disorders of mineral metabolism and mineral deficiencies","Disorders of muscle","Disorders of parathyroid gland","Disorders of phosphorus metabolism","Disorders of pigmentation","Disorders of the circulation of the cerebrospinal fluid","Disorders of the gallbladder","Disorders of thyroid gland","Disorders resulting from impaired renal function","Dissociative and somatoform disorders","Disturbances of skin sensation","Diverticula of colon","Diverticular disease [Bowel diverticulosis]","Dizziness and giddiness","Drug and medical agent allergy","Drug resistant microorganisms","Dyspnea [Shortness of breath]","Dysthymic disorder","Eating disorders","Edema","Effusion of joint","Ehler's Danlos syndrome","Elevated white blood cell count [Leukocytosis]","Embolism and thrombosis","Emphysema","Encephalopathy","End stage renal disease [CDK, stage 5]","Epilepsy","Epilepsy, recurrent seizures, convulsions","Escherichia coli","Esophagitis","Essential hypertension","Exostosis","Extrapyramidal and movement disorders","Facial nerve disorders and weakness","Familial dysautonomia [Riley-Day]","Fatty liver disease (FLD)","Fever","Fibrosis and cirrhosis of liver","Fluid overload","Foot drop (acquired)","Fracture of femur","Fracture of lower limb","Functional intestinal disorder","Fungal infections","Gallstones [Cholelithiasis]","Gangrene","Gastro-esophageal reflux disease [GERD]","Gastrointestinal hemorrhage","Gastrointestinal inflammation","Gastrointestinal obstruction","Gastroparesis","General symptoms and other findings","Generalized anxiety disorder","Generalized osteoarthritis","Genetic disorders relating to growth and musculoskeletal system","Genetic neuromuscular disease","Glomerular diseases","Gout","Hallucinations","Headache","Heart block","Heart failure","Heart valve disorders","Heart valve replaced","Hemangioma","Hemangioma and lymphangioma","Hemiplegia and hemiparesis","Hemo onc - by cell of origin","Herediatary connective tissue diseases","Hereditary neuropathy","Hernia","Hernia of the abdominal wall","Hidradenitis suppurativa","Human papillomavirus","Hypepigmentation*","Hypercalcemia","Hypercholesterolemia","Hyperglycemia","Hyperglyceridemia","Hyperkalemia [Hyperpotassemia]","Hyperlipidemia","Hypermobility syndrome","Hyperparathyroidism","Hypersomnia","Hypertension","Hypertensive heart disease","Hypocalcemia","Hypogammaglobulinemia NOS","Hypoglycemia","Hypokalemia [Hypopotassemia]","Hypomagnesemia*","Hyposmolality and/or hyponatremia","Hypotension","Hypothyroidism","Hypothyroidism (not specified as secondary)","Hypoxemia","Idiopathic sleep related nonobstructive alveolar hypoventilation","Immunodeficiencies","Immunodeficiency NOS","Impacted cerumen","Infection of the skin","Infective and reactive arthropathies","Inflammation of the heart [Carditis]","Inflammatory myopathy","Inflammatory spondylopathies","Insomnia","Interstitial pulmonary diseases","Intervertebral disc disorder","Intestinal infection due to C. difficile","Intestinal obstruction","Iron deficiency","Iron deficiency anemia","Irritable bowel syndrome","Ischemic heart disease","Joint derangements and related disorders","Kidney stone disease","Kidney transplant","Lack of coordination","Latex allergy","Low back pain","Lump or mass in breast or nonspecific abnormal breast exam","Lupus","Lymphedema","Major depressive disorder","Malaise and fatigue","Malignant neoplasm of the skin","Malnutrition and underweight","Melanocytic nevi*","Memory loss","Menopausal and postmenopausal disorders","Mental disorder, not otherwise specified","Metabolic syndrome [Dysmetabolic syndrome X]","Methicillin resistant Staphylococcus aureus","Microcytic anemia","Migraine","Migraine with aura","Mild cognitive impairment","Mineral deficiencies","Mitral valve disorders","Mitral valve insufficiency","Mixed disorder of acid-base balance","Mixed hyperlipidemia","Mononeuritis of upper limb","Mononeuropathies","Mood [affective] disorders","Morbid obesity","Morphologic lesions in glomerular diseases","Multiple sclerosis","Muscle weakness (generalized)","Myalgia","Myasthenia gravis and other myoneural disorders","Myelopathies","Myocardial infarction [Heart attack]","Myopathies","Myopia","Nausea","Nausea and vomiting","Neuromuscular dysfunction of bladder","Neutrophilic and Eosinophilic dermatoses","Nevus, non-neoplastic","Nicotine dependence (current and history of)","Non-pressure chronic ulcer","Obesity","Obsessive-compulsive disorder","Obstructive sleep apnea","Opioid use disorders","Orthostatic hypotension","Osteoarthritis","Osteoarthritis of more than one site","Osteomyelitis","Osteomyelitis, periostitis, and other infections involving bone","Osteoporosis","Other and unspecified disorders of metabolism","Other and unspecified dorsopathies","Other arthropathies","Other cerebrovascular disease","Other conditions or status of the mother complicating pregnancy, childbirth, or the puerperium","Other diseases of spinal cord","Other diseases of stomach and duodenum","Other disorders involving the immune mechanism","Other disorders of bladder","Other disorders of liver","Other disorders of the circulatory system","Other disorders of the kidney and ureters","Other mental and behavioral problems","Other non-inflammatory spondylopathy","Other respiratory disorders","Other skin and subcutaneous disorders","Other specified diabetes*","Other symptoms and disorders of the respiratory system","Other symptoms and disorders of the soft tissue","Other symptoms involving nervous system","Otorrhea","Overweight and obesity","Pain","Pain in ankle and joints of foot","Pain in arm*","Pain in hip","Pain in joint","Pain in knee","Pain in leg*","Palpitations","Panic disorder [episodic paroxysmal anxiety]","Parasomnias","Paresthesia of skin*","Paroxysmal atrial fibrillation*","Paroxysmal tachycardia","Patient's noncompliance with medical treatment and regimen","Penicillin allergy","Peptic ulcer","Peripheral autonomic neuropathy","Peripheral vascular disease","Peripheral vascular disease NOS [includes PAD]","Persistent atrial fibrillation*","Personal history of nicotine dependence","Personal history of pneumonia (recurrent)","Personality disorders","Plegia and unspecified paralysis","Pleural effusion","Pneumonia","Polycystic ovary syndrome","Polycythemias","Polyneuropathies","Posttraumatic stress disorder","Postural orthostatic tachycardia syndrome [POTS]","Presence of cardiac defibrillator","Presence of cardiac device","Pressure ulcer","Protein-calorie malnutrition","Proteinuria","Psychoactive substance related disorders","Pulmonary collapse [Atelectasis]","Pulmonary edema","Pulmonary embolism","Pulmonary fibrosis","Pulmonary heart disease","Pulmonary hypertension","Pulmonary insufficiency and acute respiratory distress syndrome","Pure hyperglyceridemia","Radiculopathy","Reaction to severe stress, and adjustment disorders","Renal dialysis","Renal failure","Renal tubulo-interstitial diseases","Repeated falls","Respiratory failure","Respiratory infection","Restless legs syndrome","Retention of urine","Retinopathy","Rheumatic fever and chronic rheumatic heart diseases","Rheumatic heart disease","Rheumatoid arthritis","Rheumatoid arthritis and other inflammatory polyarthropathies","Rhinitis and nasal congestion","Sacroiliitis","Sars-CoV-2*","Sciatica","Scoliosis","Seborrheic keratosis","Secondary diabetes","Secondary hyperparathyroidism","Secondary hypertension","Secondary polycythemia","Sepsis","Shock","Sinusitis","Skin changes due to chronic exposure to nonionizing radiation","Skin changes due to solar radiation","Sleep apnea","Sleep disorders","Sleep disturbances","Sleep related movement disorders","Snoring*","Solitary pulmonary nodule","Spasm of muscle","Speech disturbance","Spinal disc displacement (herniation)","Spinal stenosis","Spondylolisthesis","Spondylosis","Staphylococcus","Staphylococcus aureus","Stroke","Stroke and transient cerebral ischemic attacks","Suicidal ideations","Suicide ideation and attempt or self harm","Symptomatic menopause","Symptoms and signs involving cognitive functions and awareness","Symptoms involving digestive system","Symptoms related to joints","Symptoms related to mental disorders","Syncope and collapse","Synoviopathy and bursopathy","Systemic lupus erythematosus [SLE]","Systolic heart failure","Tachycardia","Transient alteration of awareness","Transplated organ","Tremor","Tricuspid value insufficiency*","Tricuspid valve disorders","Type 1 diabetes","Type 2 diabetes","Umbilical hernia","Urge incontinence","Urinary incontinence and enuresis","Urinary tract infection [UTI]","Venous insufficiency (chronic) (peripheral)","Venous thromboembolism","Ventral hernia","Ventricular tachycardia","Visual disturbances","Vitamin B group deficiency","Vitamin D deficiency","Vitamin deficiencies","Volume depletion","Vomiting","Weakness","Wheezing"),
+  `Chen - AOU` = c("Anxiety and anxiety disorders","Cardiac arrhythmia and conduction disorders","Diabetes mellitus","Diseases of esophagus","Disorders of fluid, electrolyte and acid-base balance","Esophagitis","Essential hypertension","Gastro-esophageal reflux disease [GERD]","Hypertension","Major depressive disorder","Mood [affective] disorders","Morbid obesity","Obesity","Obstructive sleep apnea","Sleep apnea","Type 2 diabetes"),
+  `Khurshid - UKB` = c("Anxiety and anxiety disorders","Aphagia and dysphagia","Aphasia and dysphasia","Atherosclerosis [ASCVD]","Atrial fibrillation","Back pain","Bacteremia, Sepsis, and SIRS","Bacterial infections","Bacterial pneumonia","Benign neoplasm of the colon","Benign neoplasm of the digestive organs","Bronchiectasis","Cardiac arrhythmia and conduction disorders","Cerebral infarction [Ischemic stroke]","Cerebrovascular insufficiency","Chest pain","Cholecystitis","Chronic bronchitis","Chronic fatigue syndrome","Chronic kidney disease","Chronic liver disease","Chronic nonalcoholic liver disease","Chronic obstructive pulmonary disease [COPD]","Chronic ulcer of skin","Coagulation defects, purpura and other hemorrhagic conditions","Constipation","Coronary atherosclerosis [Atherosclerotic heart disease]","Current tobacco use and nicotine dependence","Deforming dorsopathies","Diabetes mellitus","Diaphragmatic hernia","Diseases of esophagus","Disorders of calcium metabolism","Disorders of fluid, electrolyte and acid-base balance","Disorders of lipoprotein metabolism and other lipidemias","Disorders of mineral metabolism and mineral deficiencies","Disorders of phosphorus metabolism","Disorders of vestibular function","Diverticular disease [Bowel diverticulosis]","Dizziness and giddiness","Drug and medical agent allergy","Dyspnea [Shortness of breath]","Edema","Emphysema","Epistaxis","Escherichia coli","Esophagitis","Essential hypertension","Extrapyramidal and movement disorders","Fracture of bones in thorax","Fracture of upper limb","Functional intestinal disorder","Gallstones [Cholelithiasis]","Gastro-esophageal reflux disease [GERD]","Gastrointestinal hemorrhage","Heart block","Heart failure","Hemiplegia and hemiparesis","Hemorrhoids","Hernia of the abdominal wall","Hypercholesterolemia","Hyperkalemia [Hyperpotassemia]","Hyperlipidemia","Hypertension","Hypocalcemia","Hypokalemia [Hypopotassemia]","Hypotension","Hypovolemia","Inflammatory polyneuropathy","Intestinal infection","Iron deficiency anemia","Ischemic heart disease","Left bundle branch block","Major depressive disorder","Malaise and fatigue","Malignant neoplasm of the of bronchus and lung","Malignant neoplasm of the thoracic and respiratory organs","Mental disorder, not otherwise specified","Mixed disorder of acid-base balance","Mood [affective] disorders","Myalgia","Myocardial infarction [Heart attack]","Nausea","Non-pressure chronic ulcer","Nonspecific abnormal results of function study of liver","Obesity","Occlusion and stenosis of cerebral arteries","Orthostatic hypotension","Osteoarthritis","Osteochondrosis","Osteoporosis","Other cerebrovascular disease","Other digestive system symptoms and diseases","Other disorders of arteries and arterioles","Other disorders of bladder","Other disorders of bone","Other disorders of liver","Other disorders of the circulatory system","Other disorders of the kidney and ureters","Other respiratory disorders","Other symptoms involving nervous system","Other symptoms/disorders or the urinary system","Overweight and obesity","Parkinson's disease (Primary)","Pathological fracture","Penicillin allergy","Peripheral vascular disease","Peripheral vascular disease NOS [includes PAD]","Pleural effusion","Pleurisy","Pneumonia","Pressure ulcer","Pulmonary collapse [Atelectasis]","Pulmonary embolism","Pulmonary fibrosis","Pulmonary heart disease","Pulmonary insufficiency and acute respiratory distress syndrome","Renal failure","Respiratory failure","Retention of urine","Rheumatic heart disease","Rheumatoid arthritis","Scoliosis","Secondary hyperparathyroidism","Sepsis","Sequelae of cancer","Skin symptoms","Sleep apnea","Sleep disorders","Spinal stenosis","Stroke and transient cerebral ischemic attacks","Symptoms and signs concerning food and fluid intake","Tachycardia","Toxic polyneuropathy","Type 2 diabetes","Urinary tract infection [UTI]","Viral infections","Vitamin B group deficiency","Vitamin D deficiency","Vitamin deficiencies","Vomiting","Disorders of pancreatic internal secretion (excl. DM)","Delirium dementia and amnestic and other cognitive disorders","Delirium due to conditions classified elsewhere","Other CNS infection and poliomyelitis","Other forms of chronic heart disease","Pneumococcal pneumonia","Dependence on respirator [Ventilator] or supplemental oxygen","Opiates and related narcotics causing adverse effects in therapeutic use","Effects radiation NOS","Other tests","Chemotherapy","Poisoning by antibiotics","Poisoning by analgesics, antipyretics, and antirheumatics"),
+  `Master - AOU` = c("Acute kidney failure","Convulsions","Diastolic heart failure","Dyspnea [Shortness of breath]","Essential hypertension","Gastro-esophageal reflux disease [GERD]","Hypokalemia [Hypopotassemia]","Inflammatory polyneuropathy","Morbid obesity","Nausea","Obesity","Obstructive sleep apnea","Sleep apnea","Toxic polyneuropathy","Type 2 diabetes","Urinary incontinence and enuresis","Vomiting","Transplants"),
+  `Barker - UKB` = c("Alcohol abuse and dependence","Alcohol use disorders","Aneurysm or ectasia","Angina pectoris","Aplastic anemia","Arterial embolism and thrombosis","Back pain","Benign prostatic hyperplasia","Bilateral hearing loss","Bipolar disorder","Blindness and low vision","Bronchiectasis","Cardiac arrhythmia and conduction disorders","Cataract","Cerebral infarction [Ischemic stroke]","Cerebral palsy and other paralytic syndromes","Chronic cystitis","Chronic kidney disease","Chronic obstructive pulmonary disease [COPD]","Coronary atherosclerosis [Atherosclerotic heart disease]","Diabetes mellitus","Diaphragmatic hernia","Disorders of choroid","Disorders of menstruation and other abnormal bleeding from female genital tract","Disorders of parathyroid gland","Disorders of the retina","Disorders of thyroid gland","Diverticular disease [Bowel diverticulosis]","Duodenitis","Epilepsy","Excessive menstruation","Extrapyramidal and movement disorders","Functional intestinal disorder","Gastritis","Gastro-esophageal reflux disease [GERD]","Heart failure","Hemorrhagic stroke","Hypertension","Hypothyroidism","Immunodeficiencies","Kidney stone disease","Major depressive disorder","Malignant neoplasm of kidney, except pelvis","Malignant neoplasm of the bladder","Malignant neoplasm of the breast","Malignant neoplasm of the of bronchus and lung","Malignant neoplasm of the skin","Migraine","Multiple sclerosis","Myocardial infarction [Heart attack]","Osteoarthritis","Osteoporosis","Other and unspecified dorsopathies","Other diseases of spinal cord","Other malignant neoplasms of lymphoid, hematopoietic and related tissue","Other symptoms and disorders of the soft tissue","Peptic ulcer","Plegia and unspecified paralysis","Polyneuropathies","Pulmonary embolism","Rheumatoid arthritis","Sarcoidosis","Sleep disorders","Transient cerebral ischemic attack [TIA]","Ulcerative colitis","Unilateral hearing loss","Visual disturbances","Valvular heart disease","HPA axis disorders","Systemic atrophies primarily affecting the central nervous system"),
+  `Watts - UKB` = c("Carpal tunnel syndrome","Cerebral infarction [Ischemic stroke]","Diabetes mellitus","Disorders of the gallbladder","Diverticular disease [Bowel diverticulosis]","Inguinal hernia","Iron deficiency anemia","Osteoarthritis","Pneumonia","Urinary tract infection [UTI]","Venous thromboembolism","Colon polyps"),
+  `HHS - Many` = c("Dementias","Hyperlipidemia","Hypertension","Lack of coordination","Major depressive disorder","Malignant neoplasm of colon","Malignant neoplasm of endometrium","Malignant neoplasm of the bladder","Malignant neoplasm of the breast","Malignant neoplasm of the digestive organs","Malignant neoplasm of the kidney","Malignant neoplasm of the of bronchus and lung","Osteoporosis and low bone density","Overweight and obesity","Repeated falls*","Stroke","Symptoms and signs involving cognitive functions and awareness","Type 2 diabetes","Cardiovascular disease","Cancer of the esophagus"),
+  `Ke - CKB` = c("Abdominal pain","Abnormal glucose","Acute kidney failure","Acute myocardial infarction","Acute pancreatitis","Anemia","Angina pectoris","Atherosclerosis [ASCVD]","Benign prostatic hyperplasia","Brain damage and brain death","Cardiac arrest","Cardiac arrhythmia and conduction disorders","Cataract","Cerebral infarction [Ischemic stroke]","Cholecystitis","Chronic hepatitis","Chronic kidney disease","Chronic obstructive pulmonary disease [COPD]","Coagulation defects, purpura and other hemorrhagic conditions","Complications and ill-defined descriptions of heart disease","Dementias","Diabetes mellitus","Disorder of nervous system","Disorders of lipoprotein metabolism and other lipidemias","Disorders of vitreous body","Duodenitis","Epilepsy","Essential hypertension","Fibrosis and cirrhosis of liver","Functional dyspepsia","Gallstones [Cholelithiasis]","Gastritis","General symptoms and other findings","Gout","Heart failure","Hypothyroidism","Infections","Inguinal hernia","Ischemic heart disease","Malignant neoplasm of the breast","Malignant neoplasm of the of bronchus and lung","Nontraumatic Intracranial hemorrhage","Occlusion and stenosis of cerebral arteries","Occlusion and stenosis of precerebral arteries","Osteoporosis","Other and unspecified disorders of metabolism","Other and unspecified dorsopathies","Other cerebrovascular disease","Other digestive system symptoms and diseases","Other disorders of liver","Parkinson's disease (Primary)","Pneumonia","Protein-calorie malnutrition","Pulmonary heart disease","Respiratory failure","Rheumatic heart disease","Schizophrenia","Secondary malignant neoplasm","Sleep disorders","Spondylosis","Stroke","Synoviopathy and bursopathy","Transient cerebral ischemic attack [TIA]","Varicose veins","Malignant neoplasm of liver and intrahepatic bile ducts","Biliary cancer other than the liver","Benign neoplasm of middle ear and respiratory system","Chronic nephritic syndrome","Injury of unspecified body region")
+)
+
+# Convert to presence/absence data.frame suitable for UpSetR
+incidence <- fromList(lists)
+
+# Plot
+upset <- upset(
+    incidence,
+    sets = names(lists),
+    nsets = length(lists),
+    order.by = "freq",
+    decreasing = TRUE,
+    main.bar.color = "black",
+    sets.bar.color = "black",
+    keep.order = FALSE,
+    mb.ratio = c(0.6, 0.4),
+    nintersects = NA,
+    sets.x.label = "Number of associations"
+)
+
+upset
+```
+
+```{r}
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/upset.png", width = 11, height = 6, units = "in", res = 400)
+upset
+dev.off()
+```
+
+## Figure 3
+
+### 3a - Forest plot (step count)
+
+Make a list of novel phecodes (those not shown to be significant in prior studies) from the most significant phecodes:
+
+```{r}
+novel <- c(
+    "Chronic pain syndrome",
+    "Disorders of autonomic nervous system"
+)
+```
+
+```{r}
+# Define color palette
+time_palette <- c(
+  "Day" = "#f9c80e",
+  "Week" = "#f86624",
+  "Month" = "#156082",
+  "Six months" = "#43bccd",
+  "Year" = "#662e9b"
+)
+
+# Create phecode label to note novel associations - novel phecodes bolded using markdown
+logistic_combined_top <- logistic_combined_top %>%
+    mutate(phecode_label = if_else(
+        phecode_string %in% novel,
+        paste0("**", phecode_string, "**"),
+        phecode_string
+    )
+)
+
+cox_combined_top <- cox_combined_top %>%
+    mutate(phecode_label = if_else(
+        phecode_string %in% novel,
+        paste0("**", phecode_string, "**"),
+        phecode_string
+    )
+)
+
+# Define phecode ordering
+logistic_phecode_order <- logistic_combined_top %>%
+    group_by(phecode_label) %>%
+    summarize(order_val = min(odds_ratio, na.rm = TRUE)) %>%
+    arrange(order_val) %>%
+    pull(phecode_label)
+
+logistic_combined_top <- logistic_combined_top %>%
+    mutate(phecode_label = factor(phecode_label, levels = logistic_phecode_order))
+
+cox_phecode_order <- cox_combined_top %>%
+    group_by(phecode_label) %>%
+    summarize(order_val = min(hazard_ratio, na.rm = TRUE)) %>%
+    arrange(order_val) %>%
+    pull(phecode_label)
+
+cox_combined_top <- cox_combined_top %>%
+    mutate(phecode_label = factor(phecode_label, levels = cox_phecode_order))
+
+# Create forest plots
+
+## Step count - prevalent   
+fp_logistic_steps <- ggplot(data = logistic_combined_top %>% filter(metric == "steps"), aes(x = odds_ratio, y = phecode_label, color = time)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = exp(conf_int_1), xmax = exp(conf_int_2)), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.65, 1.05)) +
+    labs(title = "Prevalent associations", x = "OR (per 1,000 steps higher)", y = NULL, color = "Time window") +
+    theme_minimal() +
+    scale_color_manual(values = time_palette) +
+    theme(
+        axis.text.y = element_markdown(size = 8),
+        axis.text.x = element_text(size = 8),
+        axis.title.x = element_text(size = 8),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 6),
+        legend.title = element_text(size = 6),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+    
+## Step count - incident   
+fp_cox_steps <- ggplot(data = cox_combined_top %>% filter(metric == "steps"), aes(x = hazard_ratio, y = phecode_label, color = time)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = hazard_ratio_low, xmax = hazard_ratio_high), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.65, 1.05)) +
+    labs(title = "Incident associations", x = "HR (per 1,000 steps higher)", y = NULL, color = "Time window") +
+    theme_minimal() +
+    scale_color_manual(values = time_palette) +
+    theme(
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(size = 8),
+        axis.title.x = element_text(size = 8),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 6),
+        legend.title = element_text(size = 6),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+```
+
+```{r}
+fp_steps <-
+    (fp_logistic_steps + fp_cox_steps) +
+    plot_layout(
+        ncol = 2,
+        guides = "collect",
+        axes = "collect"
+    )
+```
+
+```{r}
+fp_steps
+
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/fp_steps.png", width = 10, height = 9, units = "in", res = 400)
+fp_steps
+dev.off()
+```
+
+### 3b - Bonferroni count plot
+
+```{r}
+# Bonferroni count using # rows as # tests
+bonferroni_count <- function(df, pcol = "p_value", alpha = 0.05) {
+  if (!pcol %in% names(df)) stop("Column '", pcol, "' not found in df.")
+  if (nrow(df) == 0) return(0L)
+  thresh <- alpha / nrow(df)
+  sum(df[[pcol]] < thresh, na.rm = TRUE)
+}
+
+# Set column order
+column_labels <- c(paste0("Logistic regression-", metrics), paste0("Cox regression-", metrics))
+
+# Create blank matrix
+res <- matrix(NA_integer_,
+              nrow = length(periods),
+              ncol = length(column_labels),
+              dimnames = list(periods, column_labels))
+
+# Fill in for each metric-period combination
+for (i in seq_along(periods)) {
+  per <- periods[i]
+  col_idx <- 1
+  
+  # All LR columns
+  for (m in metrics) {
+    obj_name <- paste("logistic", per, m, sep = "_")  # e.g., "logistic_day_steps"
+    if (!exists(obj_name, inherits = TRUE)) stop("Data frame '", obj_name, "' not found.")
+    res[i, col_idx] <- bonferroni_count(get(obj_name), pcol = "p_value", alpha = 0.05)
+    col_idx <- col_idx + 1
+  }
+  
+  # All Cox columns
+  for (m in metrics) {
+    obj_name <- paste("cox", per, m, sep = "_") # e.g., "cox_day_steps"
+    if (!exists(obj_name, inherits = TRUE)) stop("Data frame '", obj_name, "' not found.")
+    res[i, col_idx] <- bonferroni_count(get(obj_name), pcol = "p_value", alpha = 0.05)
+    col_idx <- col_idx + 1
+  }
+}
+
+bonferroni_summary <- as.data.frame(res, stringsAsFactors = FALSE)
+
+# View the table
+bonferroni_summary
+```
+
+```{r}
+# Convert rownames to a column
+bonferroni_summary <- bonferroni_summary %>%
+  mutate(Period = rownames(bonferroni_summary))
+
+# Long format
+df_bonferroni_long <- bonferroni_summary %>%
+  pivot_longer(
+    cols = -Period,
+    names_to = "VariableModel",
+    values_to = "SigCount"
+  ) %>%
+  separate(VariableModel, into = c("Model", "Variable"), sep = "-", remove = FALSE)
+
+# Order Period
+df_bonferroni_long$Variable <- factor(df_bonferroni_long$Variable,
+                           levels = c("steps", "cadence1", "cadence30", "dhrps"))
+
+df_bonferroni_long$Period <- factor(df_bonferroni_long$Period,
+                         levels = c("day", "week", "month", "six", "year"),
+                         labels = c("Day", "Week", "Month", "Six Months", "Year"))
+
+df_bonferroni_long$Model <- factor(df_bonferroni_long$Model,
+                        levels = c("Logistic regression", "Cox regression"),
+                        labels = c("Prevalent associations", "Incident associations"))
+
+# Plot: same color for same variable, different linetype for model
+bonferroni <- ggplot(df_bonferroni_long, aes(x = Period, 
+                                  y = SigCount,
+                                  group = interaction(Variable, Model),
+                                  color = Variable, linetype = Model)) +
+    geom_line() +
+    geom_point() +
+    labs(x = "Time window",
+       y = "Number of Bonferroni-significant outcomes",
+       group = "Model",
+       color = "Metric") +
+    theme_minimal() +
+    scale_color_manual(
+        values = c(
+            "#1170AAFF",
+            "#57606CFF",
+            "#A3CCE9FF",
+            "#FC7D0BFF"
+        ),
+        labels = c(
+            "Step count",
+            "Peak 1-min cadence",
+            "Peak 30-min cadence",
+            "Daily heart rate per step"
+        )
+    )
+```
+
+```{r}
+bonferroni
+
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/bonferroni.png", width = 7, height = 8, units = "in", res = 400)
+bonferroni
+dev.off()
+```
+
+### Combine
+
+These figures were combined using Microsoft Powerpoint.
+
+## Supplementary Figure 7 - Forest plot + heat map
+
+### Step count
+
+```{r}
+# Forest plot - step count - prevalent
+fp_logistic_steps <- ggplot(data = logistic_combined_top %>% filter(metric == "steps"), aes(x = odds_ratio, y = phecode_label, color = time)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = exp(conf_int_1), xmax = exp(conf_int_2)), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.65, 1.05)) +
+    labs(title = "Prevalent associations", x = "OR (per 1,000 steps higher)", y = NULL, color = "Time window") +
+    theme_minimal() +
+    scale_color_manual(values = time_palette) +
+    theme(
+        axis.text.y = element_markdown(size = 8),
+        axis.text.x = element_text(size = 8),
+        axis.title.x = element_text(size = 8, margin = margin(t = -60)),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+
+# Forest plot - step count - incident   
+fp_cox_steps <- ggplot(data = cox_combined_top %>% filter(metric == "steps"), aes(x = hazard_ratio, y = phecode_label, color = time)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = hazard_ratio_low, xmax = hazard_ratio_high), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.65, 1.05)) +
+    labs(title = "Incident associations", x = "HR (per 1,000 steps higher)", y = NULL, color = "Time window") +
+    theme_minimal() +
+    scale_color_manual(values = time_palette) +
+    theme(
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(size = 8),
+        axis.title.x = element_text(size = 8, margin = margin(t = -60)),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+
+# Heatmap - step count - prevalent
+logistic_time_comparisons_steps <- logistic_combined_top %>%
+    filter(metric == "steps") %>%
+    pivot_wider(
+        id_cols = phecode_string,
+        names_from = time,
+        values_from = c(beta, standard_error)
+    ) %>%
+    mutate(
+        # Day v week
+        day_week_z = (beta_Day - beta_Week) / sqrt(standard_error_Day^2 + standard_error_Week^2),
+        day_week_p = 2 * pnorm(-abs(day_week_z)),
+
+        # Day v month
+        day_month_z = (beta_Day - beta_Month) / sqrt(standard_error_Day^2 + standard_error_Month^2),
+        day_month_p = 2 * pnorm(-abs(day_month_z)),
+
+        # Day v six months
+        day_six_z = (beta_Day - `beta_Six months`) / sqrt(standard_error_Day^2 + `standard_error_Six months`^2),
+        day_six_p = 2 * pnorm(-abs(day_six_z)),
+
+        # Day v year
+        day_year_z = (beta_Day - beta_Year) / sqrt(standard_error_Day^2 + standard_error_Year^2),
+        day_year_p = 2 * pnorm(-abs(day_year_z)),
+
+        # Week v month
+        week_month_z = (beta_Week - beta_Month) / sqrt(standard_error_Week^2 + standard_error_Month^2),
+        week_month_p = 2 * pnorm(-abs(week_month_z)),
+
+        # Week v six months
+        week_six_z = (beta_Week - `beta_Six months`) / sqrt(standard_error_Week^2 + `standard_error_Six months`^2),
+        week_six_p = 2 * pnorm(-abs(week_six_z)),
+
+        # Week v year
+        week_year_z = (beta_Week - beta_Year) / sqrt(standard_error_Week^2 + standard_error_Year^2),
+        week_year_p = 2 * pnorm(-abs(week_year_z)),
+
+        # Month v six months
+        month_six_z = (beta_Month - `beta_Six months`) / sqrt(standard_error_Month^2 + `standard_error_Six months`^2),
+        month_six_p = 2 * pnorm(-abs(month_six_z)),
+
+        # Month v year
+        month_year_z = (beta_Month - beta_Year) / sqrt(standard_error_Month^2 + standard_error_Year^2),
+        month_year_p = 2 * pnorm(-abs(month_year_z)),
+
+        # Six months v year
+        six_year_z = (`beta_Six months` - beta_Year) / sqrt(`standard_error_Six months`^2 + standard_error_Year^2),
+        six_year_p = 2 * pnorm(-abs(six_year_z))
+    )
+
+df_heatmap_logistic_steps <- logistic_time_comparisons_steps %>%
+    select(phecode_string, ends_with("_p")) %>%
+    pivot_longer(
+        cols = -phecode_string,
+        names_to = "comparison",
+        values_to = "p"
+    ) %>%
+    mutate(
+        comparison = recode(
+            comparison,
+            day_week_p   = "Day vs Week",
+            day_month_p  = "Day vs Month",
+            day_six_p    = "Day vs Six months",
+            day_year_p   = "Day vs Year",
+            week_month_p = "Week vs Month",
+            week_six_p   = "Week vs Six months",
+            week_year_p  = "Week vs Year",
+            month_six_p  = "Month vs Six months",
+            month_year_p = "Month vs Year",
+            six_year_p   = "Six months vs Year"
+        ),
+        comparison = factor(
+            comparison,
+            levels = c(
+                "Day vs Week",
+                "Day vs Month",
+                "Day vs Six months",
+                "Day vs Year",
+                "Week vs Month",
+                "Week vs Six months",
+                "Week vs Year",
+                "Month vs Six months",
+                "Month vs Year",
+                "Six months vs Year"
+            )
+        ),
+        neglog10p = -log10(p)
+    )
+
+heatmap_logistic_steps <- ggplot(df_heatmap_logistic_steps,
+       aes(x = comparison, y = phecode_string, fill = neglog10p)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient(low = "#D5D5D5", high = "#49525E", na.value = "grey90", limits = c(0, 20)) +
+    labs(x = NULL, y = NULL, fill = expression("Z-score " * -log[10](p))) +
+    theme_minimal() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        axis.text.y = element_blank(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)
+    )
+
+# Heatmap - step count - incident
+cox_time_comparisons_steps <- cox_combined_top %>%
+    filter(metric == "steps") %>%
+    pivot_wider(
+        id_cols = phecode_string,
+        names_from = time,
+        values_from = c(log_hazard_ratio, standard_error)
+    ) %>%
+    mutate(
+        # Day v week
+        day_week_z = (log_hazard_ratio_Day - log_hazard_ratio_Week) / sqrt(standard_error_Day^2 + standard_error_Week^2),
+        day_week_p = 2 * pnorm(-abs(day_week_z)),
+
+        # Day v month
+        day_month_z = (log_hazard_ratio_Day - log_hazard_ratio_Month) / sqrt(standard_error_Day^2 + standard_error_Month^2),
+        day_month_p = 2 * pnorm(-abs(day_month_z)),
+
+        # Day v six months
+        day_six_z = (log_hazard_ratio_Day - `log_hazard_ratio_Six months`) / sqrt(standard_error_Day^2 + `standard_error_Six months`^2),
+        day_six_p = 2 * pnorm(-abs(day_six_z)),
+
+        # Day v year
+        day_year_z = (log_hazard_ratio_Day - log_hazard_ratio_Year) / sqrt(standard_error_Day^2 + standard_error_Year^2),
+        day_year_p = 2 * pnorm(-abs(day_year_z)),
+
+        # Week v month
+        week_month_z = (log_hazard_ratio_Week - log_hazard_ratio_Month) / sqrt(standard_error_Week^2 + standard_error_Month^2),
+        week_month_p = 2 * pnorm(-abs(week_month_z)),
+
+        # Week v six months
+        week_six_z = (log_hazard_ratio_Week - `log_hazard_ratio_Six months`) / sqrt(standard_error_Week^2 + `standard_error_Six months`^2),
+        week_six_p = 2 * pnorm(-abs(week_six_z)),
+
+        # Week v year
+        week_year_z = (log_hazard_ratio_Week - log_hazard_ratio_Year) / sqrt(standard_error_Week^2 + standard_error_Year^2),
+        week_year_p = 2 * pnorm(-abs(week_year_z)),
+
+        # Month v six months
+        month_six_z = (log_hazard_ratio_Month - `log_hazard_ratio_Six months`) / sqrt(standard_error_Month^2 + `standard_error_Six months`^2),
+        month_six_p = 2 * pnorm(-abs(month_six_z)),
+
+        # Month v year
+        month_year_z = (log_hazard_ratio_Month - log_hazard_ratio_Year) / sqrt(standard_error_Month^2 + standard_error_Year^2),
+        month_year_p = 2 * pnorm(-abs(month_year_z)),
+
+        # Six months v year
+        six_year_z = (`log_hazard_ratio_Six months` - log_hazard_ratio_Year) / sqrt(`standard_error_Six months`^2 + standard_error_Year^2),
+        six_year_p = 2 * pnorm(-abs(six_year_z))
+    )
+
+df_heatmap_cox_steps <- cox_time_comparisons_steps %>%
+    select(phecode_string, ends_with("_p")) %>%
+    pivot_longer(
+        cols = -phecode_string,
+        names_to = "comparison",
+        values_to = "p"
+    ) %>%
+    mutate(
+        comparison = recode(
+            comparison,
+            day_week_p   = "Day vs Week",
+            day_month_p  = "Day vs Month",
+            day_six_p    = "Day vs Six months",
+            day_year_p   = "Day vs Year",
+            week_month_p = "Week vs Month",
+            week_six_p   = "Week vs Six months",
+            week_year_p  = "Week vs Year",
+            month_six_p  = "Month vs Six months",
+            month_year_p = "Month vs Year",
+            six_year_p   = "Six months vs Year"
+        ),
+        comparison = factor(
+            comparison,
+            levels = c(
+                "Day vs Week",
+                "Day vs Month",
+                "Day vs Six months",
+                "Day vs Year",
+                "Week vs Month",
+                "Week vs Six months",
+                "Week vs Year",
+                "Month vs Six months",
+                "Month vs Year",
+                "Six months vs Year"
+            )
+        ),
+        neglog10p = -log10(p)
+    )
+
+heatmap_cox_steps <- ggplot(df_heatmap_cox_steps,
+       aes(x = comparison, y = phecode_string, fill = neglog10p)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient(low = "#D5D5D5", high = "#49525E", na.value = "grey90", limits = c(0, 20)) +
+    labs(x = NULL, y = NULL, fill = expression("Z-score " * -log[10](p))) +
+    theme_minimal() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        axis.text.y = element_blank(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)
+    )
+```
+
+```{r}
+fp_heat_steps <- fp_logistic_steps + heatmap_logistic_steps + fp_cox_steps + heatmap_cox_steps +
+  plot_layout(
+    ncol = 4,
+    widths = c(1.5, 1, 1.5, 1),
+     guides = "collect"
+  ) &
+  theme(legend.position = "right")
+```
+
+```{r}
+fp_heat_steps
+
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/fp_heat_steps.png", width = 14, height = 8, units = "in", res = 400)
+fp_heat_steps
+dev.off()
+```
+
+### Peak 1-min cadence
+
+```{r}
+# Forest plot - peak 1-min cadence - prevalent
+fp_logistic_cadence1 <- ggplot(data = logistic_combined_top %>% filter(metric == "cadence1"), aes(x = odds_ratio, y = phecode_label, color = time)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = exp(conf_int_1), xmax = exp(conf_int_2)), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.45, 1.05)) +
+    labs(title = "Prevalent associations", x = "OR (per 10 steps/min higher)", y = NULL, color = "Time window") +
+    theme_minimal() +
+    scale_color_manual(values = time_palette) +
+    theme(
+        axis.text.y = element_markdown(size = 8),
+        axis.text.x = element_text(size = 8),
+        axis.title.x = element_text(size = 8, margin = margin(t = -60)),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+
+# Forest plot - peak 1-min cadence - incident   
+fp_cox_cadence1 <- ggplot(data = cox_combined_top %>% filter(metric == "cadence1"), aes(x = hazard_ratio, y = phecode_label, color = time)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = hazard_ratio_low, xmax = hazard_ratio_high), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.45, 1.05)) +
+    labs(title = "Incident associations", x = "HR (per 10 steps/min higher)", y = NULL, color = "Time window") +
+    theme_minimal() +
+    scale_color_manual(values = time_palette) +
+    theme(
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(size = 8),
+        axis.title.x = element_text(size = 8, margin = margin(t = -60)),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+
+# Heatmap - peak 1-min cadence - prevalent
+logistic_time_comparisons_cadence1 <- logistic_combined_top %>%
+    filter(metric == "cadence1") %>%
+    pivot_wider(
+        id_cols = phecode_string,
+        names_from = time,
+        values_from = c(beta, standard_error)
+    ) %>%
+    mutate(
+        # Day v week
+        day_week_z = (beta_Day - beta_Week) / sqrt(standard_error_Day^2 + standard_error_Week^2),
+        day_week_p = 2 * pnorm(-abs(day_week_z)),
+
+        # Day v month
+        day_month_z = (beta_Day - beta_Month) / sqrt(standard_error_Day^2 + standard_error_Month^2),
+        day_month_p = 2 * pnorm(-abs(day_month_z)),
+
+        # Day v six months
+        day_six_z = (beta_Day - `beta_Six months`) / sqrt(standard_error_Day^2 + `standard_error_Six months`^2),
+        day_six_p = 2 * pnorm(-abs(day_six_z)),
+
+        # Day v year
+        day_year_z = (beta_Day - beta_Year) / sqrt(standard_error_Day^2 + standard_error_Year^2),
+        day_year_p = 2 * pnorm(-abs(day_year_z)),
+
+        # Week v month
+        week_month_z = (beta_Week - beta_Month) / sqrt(standard_error_Week^2 + standard_error_Month^2),
+        week_month_p = 2 * pnorm(-abs(week_month_z)),
+
+        # Week v six months
+        week_six_z = (beta_Week - `beta_Six months`) / sqrt(standard_error_Week^2 + `standard_error_Six months`^2),
+        week_six_p = 2 * pnorm(-abs(week_six_z)),
+
+        # Week v year
+        week_year_z = (beta_Week - beta_Year) / sqrt(standard_error_Week^2 + standard_error_Year^2),
+        week_year_p = 2 * pnorm(-abs(week_year_z)),
+
+        # Month v six months
+        month_six_z = (beta_Month - `beta_Six months`) / sqrt(standard_error_Month^2 + `standard_error_Six months`^2),
+        month_six_p = 2 * pnorm(-abs(month_six_z)),
+
+        # Month v year
+        month_year_z = (beta_Month - beta_Year) / sqrt(standard_error_Month^2 + standard_error_Year^2),
+        month_year_p = 2 * pnorm(-abs(month_year_z)),
+
+        # Six months v year
+        six_year_z = (`beta_Six months` - beta_Year) / sqrt(`standard_error_Six months`^2 + standard_error_Year^2),
+        six_year_p = 2 * pnorm(-abs(six_year_z))
+    )
+
+df_heatmap_logistic_cadence1 <- logistic_time_comparisons_cadence1 %>%
+    select(phecode_string, ends_with("_p")) %>%
+    pivot_longer(
+        cols = -phecode_string,
+        names_to = "comparison",
+        values_to = "p"
+    ) %>%
+    mutate(
+        comparison = recode(
+            comparison,
+            day_week_p   = "Day vs Week",
+            day_month_p  = "Day vs Month",
+            day_six_p    = "Day vs Six months",
+            day_year_p   = "Day vs Year",
+            week_month_p = "Week vs Month",
+            week_six_p   = "Week vs Six months",
+            week_year_p  = "Week vs Year",
+            month_six_p  = "Month vs Six months",
+            month_year_p = "Month vs Year",
+            six_year_p   = "Six months vs Year"
+        ),
+        comparison = factor(
+            comparison,
+            levels = c(
+                "Day vs Week",
+                "Day vs Month",
+                "Day vs Six months",
+                "Day vs Year",
+                "Week vs Month",
+                "Week vs Six months",
+                "Week vs Year",
+                "Month vs Six months",
+                "Month vs Year",
+                "Six months vs Year"
+            )
+        ),
+        neglog10p = -log10(p)
+    )
+
+heatmap_logistic_cadence1 <- ggplot(df_heatmap_logistic_cadence1,
+       aes(x = comparison, y = phecode_string, fill = neglog10p)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient(low = "#D5D5D5", high = "#49525E", na.value = "grey90", limits = c(0, 45)) +
+    labs(x = NULL, y = NULL, fill = expression("Z-score " * -log[10](p))) +
+    theme_minimal() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        axis.text.y = element_blank(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)
+    )
+
+# Heatmap - peak 1-min cadence - incident
+cox_time_comparisons_cadence1 <- cox_combined_top %>%
+    filter(metric == "cadence1") %>%
+    pivot_wider(
+        id_cols = phecode_string,
+        names_from = time,
+        values_from = c(log_hazard_ratio, standard_error)
+    ) %>%
+    mutate(
+        # Day v week
+        day_week_z = (log_hazard_ratio_Day - log_hazard_ratio_Week) / sqrt(standard_error_Day^2 + standard_error_Week^2),
+        day_week_p = 2 * pnorm(-abs(day_week_z)),
+
+        # Day v month
+        day_month_z = (log_hazard_ratio_Day - log_hazard_ratio_Month) / sqrt(standard_error_Day^2 + standard_error_Month^2),
+        day_month_p = 2 * pnorm(-abs(day_month_z)),
+
+        # Day v six months
+        day_six_z = (log_hazard_ratio_Day - `log_hazard_ratio_Six months`) / sqrt(standard_error_Day^2 + `standard_error_Six months`^2),
+        day_six_p = 2 * pnorm(-abs(day_six_z)),
+
+        # Day v year
+        day_year_z = (log_hazard_ratio_Day - log_hazard_ratio_Year) / sqrt(standard_error_Day^2 + standard_error_Year^2),
+        day_year_p = 2 * pnorm(-abs(day_year_z)),
+
+        # Week v month
+        week_month_z = (log_hazard_ratio_Week - log_hazard_ratio_Month) / sqrt(standard_error_Week^2 + standard_error_Month^2),
+        week_month_p = 2 * pnorm(-abs(week_month_z)),
+
+        # Week v six months
+        week_six_z = (log_hazard_ratio_Week - `log_hazard_ratio_Six months`) / sqrt(standard_error_Week^2 + `standard_error_Six months`^2),
+        week_six_p = 2 * pnorm(-abs(week_six_z)),
+
+        # Week v year
+        week_year_z = (log_hazard_ratio_Week - log_hazard_ratio_Year) / sqrt(standard_error_Week^2 + standard_error_Year^2),
+        week_year_p = 2 * pnorm(-abs(week_year_z)),
+
+        # Month v six months
+        month_six_z = (log_hazard_ratio_Month - `log_hazard_ratio_Six months`) / sqrt(standard_error_Month^2 + `standard_error_Six months`^2),
+        month_six_p = 2 * pnorm(-abs(month_six_z)),
+
+        # Month v year
+        month_year_z = (log_hazard_ratio_Month - log_hazard_ratio_Year) / sqrt(standard_error_Month^2 + standard_error_Year^2),
+        month_year_p = 2 * pnorm(-abs(month_year_z)),
+
+        # Six months v year
+        six_year_z = (`log_hazard_ratio_Six months` - log_hazard_ratio_Year) / sqrt(`standard_error_Six months`^2 + standard_error_Year^2),
+        six_year_p = 2 * pnorm(-abs(six_year_z))
+    )
+
+df_heatmap_cox_cadence1 <- cox_time_comparisons_cadence1 %>%
+    select(phecode_string, ends_with("_p")) %>%
+    pivot_longer(
+        cols = -phecode_string,
+        names_to = "comparison",
+        values_to = "p"
+    ) %>%
+    mutate(
+        comparison = recode(
+            comparison,
+            day_week_p   = "Day vs Week",
+            day_month_p  = "Day vs Month",
+            day_six_p    = "Day vs Six months",
+            day_year_p   = "Day vs Year",
+            week_month_p = "Week vs Month",
+            week_six_p   = "Week vs Six months",
+            week_year_p  = "Week vs Year",
+            month_six_p  = "Month vs Six months",
+            month_year_p = "Month vs Year",
+            six_year_p   = "Six months vs Year"
+        ),
+        comparison = factor(
+            comparison,
+            levels = c(
+                "Day vs Week",
+                "Day vs Month",
+                "Day vs Six months",
+                "Day vs Year",
+                "Week vs Month",
+                "Week vs Six months",
+                "Week vs Year",
+                "Month vs Six months",
+                "Month vs Year",
+                "Six months vs Year"
+            )
+        ),
+        neglog10p = -log10(p)
+    )
+
+heatmap_cox_cadence1 <- ggplot(df_heatmap_cox_cadence1,
+       aes(x = comparison, y = phecode_string, fill = neglog10p)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient(low = "#D5D5D5", high = "#49525E", na.value = "grey90", limits = c(0, 45)) +
+    labs(x = NULL, y = NULL, fill = expression("Z-score " * -log[10](p))) +
+    theme_minimal() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        axis.text.y = element_blank(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)
+    )
+```
+
+```{r}
+fp_heat_cadence1 <- fp_logistic_cadence1 + heatmap_logistic_cadence1 + fp_cox_cadence1 + heatmap_cox_cadence1 +
+  plot_layout(
+    ncol = 4,
+    widths = c(1.5, 1, 1.5, 1),
+     guides = "collect"
+  ) &
+  theme(legend.position = "right")
+```
+
+```{r}
+fp_heat_cadence1
+
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/fp_heat_cadence1.png", width = 14, height = 8, units = "in", res = 400)
+fp_heat_cadence1
+dev.off()
+```
+
+### Peak 30-min cadence
+
+```{r}
+# Forest plot - peak 30-min cadence - prevalent
+fp_logistic_cadence30 <- ggplot(data = logistic_combined_top %>% filter(metric == "cadence30"), aes(x = odds_ratio, y = phecode_label, color = time)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = exp(conf_int_1), xmax = exp(conf_int_2)), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.55, 1.05)) +
+    labs(title = "Prevalent associations", x = "OR (per 10 steps/min higher)", y = NULL, color = "Time window") +
+    theme_minimal() +
+    scale_color_manual(values = time_palette) +
+    theme(
+        axis.text.y = element_markdown(size = 8),
+        axis.text.x = element_text(size = 8),
+        axis.title.x = element_text(size = 8, margin = margin(t = -60)),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+
+# Forest plot - peak 30-min cadence - incident   
+fp_cox_cadence30 <- ggplot(data = cox_combined_top %>% filter(metric == "cadence30"), aes(x = hazard_ratio, y = phecode_label, color = time)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = hazard_ratio_low, xmax = hazard_ratio_high), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.55, 1.05)) +
+    labs(title = "Incident associations", x = "HR (per 10 steps/min higher)", y = NULL, color = "Time window") +
+    theme_minimal() +
+    scale_color_manual(values = time_palette) +
+    theme(
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(size = 8),
+        axis.title.x = element_text(size = 8, margin = margin(t = -60)),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+
+# Heatmap - peak 30-min cadence - prevalent
+logistic_time_comparisons_cadence30 <- logistic_combined_top %>%
+    filter(metric == "cadence30") %>%
+    pivot_wider(
+        id_cols = phecode_string,
+        names_from = time,
+        values_from = c(beta, standard_error)
+    ) %>%
+    mutate(
+        # Day v week
+        day_week_z = (beta_Day - beta_Week) / sqrt(standard_error_Day^2 + standard_error_Week^2),
+        day_week_p = 2 * pnorm(-abs(day_week_z)),
+
+        # Day v month
+        day_month_z = (beta_Day - beta_Month) / sqrt(standard_error_Day^2 + standard_error_Month^2),
+        day_month_p = 2 * pnorm(-abs(day_month_z)),
+
+        # Day v six months
+        day_six_z = (beta_Day - `beta_Six months`) / sqrt(standard_error_Day^2 + `standard_error_Six months`^2),
+        day_six_p = 2 * pnorm(-abs(day_six_z)),
+
+        # Day v year
+        day_year_z = (beta_Day - beta_Year) / sqrt(standard_error_Day^2 + standard_error_Year^2),
+        day_year_p = 2 * pnorm(-abs(day_year_z)),
+
+        # Week v month
+        week_month_z = (beta_Week - beta_Month) / sqrt(standard_error_Week^2 + standard_error_Month^2),
+        week_month_p = 2 * pnorm(-abs(week_month_z)),
+
+        # Week v six months
+        week_six_z = (beta_Week - `beta_Six months`) / sqrt(standard_error_Week^2 + `standard_error_Six months`^2),
+        week_six_p = 2 * pnorm(-abs(week_six_z)),
+
+        # Week v year
+        week_year_z = (beta_Week - beta_Year) / sqrt(standard_error_Week^2 + standard_error_Year^2),
+        week_year_p = 2 * pnorm(-abs(week_year_z)),
+
+        # Month v six months
+        month_six_z = (beta_Month - `beta_Six months`) / sqrt(standard_error_Month^2 + `standard_error_Six months`^2),
+        month_six_p = 2 * pnorm(-abs(month_six_z)),
+
+        # Month v year
+        month_year_z = (beta_Month - beta_Year) / sqrt(standard_error_Month^2 + standard_error_Year^2),
+        month_year_p = 2 * pnorm(-abs(month_year_z)),
+
+        # Six months v year
+        six_year_z = (`beta_Six months` - beta_Year) / sqrt(`standard_error_Six months`^2 + standard_error_Year^2),
+        six_year_p = 2 * pnorm(-abs(six_year_z))
+    )
+
+df_heatmap_logistic_cadence30 <- logistic_time_comparisons_cadence30 %>%
+    select(phecode_string, ends_with("_p")) %>%
+    pivot_longer(
+        cols = -phecode_string,
+        names_to = "comparison",
+        values_to = "p"
+    ) %>%
+    mutate(
+        comparison = recode(
+            comparison,
+            day_week_p   = "Day vs Week",
+            day_month_p  = "Day vs Month",
+            day_six_p    = "Day vs Six months",
+            day_year_p   = "Day vs Year",
+            week_month_p = "Week vs Month",
+            week_six_p   = "Week vs Six months",
+            week_year_p  = "Week vs Year",
+            month_six_p  = "Month vs Six months",
+            month_year_p = "Month vs Year",
+            six_year_p   = "Six months vs Year"
+        ),
+        comparison = factor(
+            comparison,
+            levels = c(
+                "Day vs Week",
+                "Day vs Month",
+                "Day vs Six months",
+                "Day vs Year",
+                "Week vs Month",
+                "Week vs Six months",
+                "Week vs Year",
+                "Month vs Six months",
+                "Month vs Year",
+                "Six months vs Year"
+            )
+        ),
+        neglog10p = -log10(p)
+    )
+
+heatmap_logistic_cadence30 <- ggplot(df_heatmap_logistic_cadence30,
+       aes(x = comparison, y = phecode_string, fill = neglog10p)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient(low = "#D5D5D5", high = "#49525E", na.value = "grey90", limits = c(0, 31)) +
+    labs(x = NULL, y = NULL, fill = expression("Z-score " * -log[10](p))) +
+    theme_minimal() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        axis.text.y = element_blank(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)
+    )
+
+# Heatmap - peak 30-min cadence - incident
+cox_time_comparisons_cadence30 <- cox_combined_top %>%
+    filter(metric == "cadence30") %>%
+    pivot_wider(
+        id_cols = phecode_string,
+        names_from = time,
+        values_from = c(log_hazard_ratio, standard_error)
+    ) %>%
+    mutate(
+        # Day v week
+        day_week_z = (log_hazard_ratio_Day - log_hazard_ratio_Week) / sqrt(standard_error_Day^2 + standard_error_Week^2),
+        day_week_p = 2 * pnorm(-abs(day_week_z)),
+
+        # Day v month
+        day_month_z = (log_hazard_ratio_Day - log_hazard_ratio_Month) / sqrt(standard_error_Day^2 + standard_error_Month^2),
+        day_month_p = 2 * pnorm(-abs(day_month_z)),
+
+        # Day v six months
+        day_six_z = (log_hazard_ratio_Day - `log_hazard_ratio_Six months`) / sqrt(standard_error_Day^2 + `standard_error_Six months`^2),
+        day_six_p = 2 * pnorm(-abs(day_six_z)),
+
+        # Day v year
+        day_year_z = (log_hazard_ratio_Day - log_hazard_ratio_Year) / sqrt(standard_error_Day^2 + standard_error_Year^2),
+        day_year_p = 2 * pnorm(-abs(day_year_z)),
+
+        # Week v month
+        week_month_z = (log_hazard_ratio_Week - log_hazard_ratio_Month) / sqrt(standard_error_Week^2 + standard_error_Month^2),
+        week_month_p = 2 * pnorm(-abs(week_month_z)),
+
+        # Week v six months
+        week_six_z = (log_hazard_ratio_Week - `log_hazard_ratio_Six months`) / sqrt(standard_error_Week^2 + `standard_error_Six months`^2),
+        week_six_p = 2 * pnorm(-abs(week_six_z)),
+
+        # Week v year
+        week_year_z = (log_hazard_ratio_Week - log_hazard_ratio_Year) / sqrt(standard_error_Week^2 + standard_error_Year^2),
+        week_year_p = 2 * pnorm(-abs(week_year_z)),
+
+        # Month v six months
+        month_six_z = (log_hazard_ratio_Month - `log_hazard_ratio_Six months`) / sqrt(standard_error_Month^2 + `standard_error_Six months`^2),
+        month_six_p = 2 * pnorm(-abs(month_six_z)),
+
+        # Month v year
+        month_year_z = (log_hazard_ratio_Month - log_hazard_ratio_Year) / sqrt(standard_error_Month^2 + standard_error_Year^2),
+        month_year_p = 2 * pnorm(-abs(month_year_z)),
+
+        # Six months v year
+        six_year_z = (`log_hazard_ratio_Six months` - log_hazard_ratio_Year) / sqrt(`standard_error_Six months`^2 + standard_error_Year^2),
+        six_year_p = 2 * pnorm(-abs(six_year_z))
+    )
+
+df_heatmap_cox_cadence30 <- cox_time_comparisons_cadence30 %>%
+    select(phecode_string, ends_with("_p")) %>%
+    pivot_longer(
+        cols = -phecode_string,
+        names_to = "comparison",
+        values_to = "p"
+    ) %>%
+    mutate(
+        comparison = recode(
+            comparison,
+            day_week_p   = "Day vs Week",
+            day_month_p  = "Day vs Month",
+            day_six_p    = "Day vs Six months",
+            day_year_p   = "Day vs Year",
+            week_month_p = "Week vs Month",
+            week_six_p   = "Week vs Six months",
+            week_year_p  = "Week vs Year",
+            month_six_p  = "Month vs Six months",
+            month_year_p = "Month vs Year",
+            six_year_p   = "Six months vs Year"
+        ),
+        comparison = factor(
+            comparison,
+            levels = c(
+                "Day vs Week",
+                "Day vs Month",
+                "Day vs Six months",
+                "Day vs Year",
+                "Week vs Month",
+                "Week vs Six months",
+                "Week vs Year",
+                "Month vs Six months",
+                "Month vs Year",
+                "Six months vs Year"
+            )
+        ),
+        neglog10p = -log10(p)
+    )
+
+heatmap_cox_cadence30 <- ggplot(df_heatmap_cox_cadence30,
+       aes(x = comparison, y = phecode_string, fill = neglog10p)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient(low = "#D5D5D5", high = "#49525E", na.value = "grey90", limits = c(0, 31)) +
+    labs(x = NULL, y = NULL, fill = expression("Z-score " * -log[10](p))) +
+    theme_minimal() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        axis.text.y = element_blank(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)
+    )
+```
+
+```{r}
+fp_heat_cadence30 <- fp_logistic_cadence30 + heatmap_logistic_cadence30 + fp_cox_cadence30 + heatmap_cox_cadence30 +
+  plot_layout(
+    ncol = 4,
+    widths = c(1.5, 1, 1.5, 1),
+     guides = "collect"
+  ) &
+  theme(legend.position = "right")
+```
+
+```{r}
+fp_heat_cadence30
+
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/fp_heat_cadence30.png", width = 14, height = 8, units = "in", res = 400)
+fp_heat_cadence30
+dev.off()
+```
+
+### Daily heart rate per step
+
+```{r}
+# Forest plot - daily heart rate per step - prevalent
+fp_logistic_dhrps <- ggplot(data = logistic_combined_top %>% filter(metric == "dhrps"), aes(x = odds_ratio, y = phecode_label, color = time)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = exp(conf_int_1), xmax = exp(conf_int_2)), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.9, 2.2)) +
+    labs(title = "Prevalent associations", x = "OR (per 0.01 DHRPS higher)", y = NULL, color = "Time window") +
+    theme_minimal() +
+    scale_color_manual(values = time_palette) +
+    theme(
+        axis.text.y = element_markdown(size = 8),
+        axis.text.x = element_text(size = 8),
+        axis.title.x = element_text(size = 8, margin = margin(t = -60)),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+
+# Forest plot - daily heart rate per step - incident   
+fp_cox_dhrps <- ggplot(data = cox_combined_top %>% filter(metric == "dhrps"), aes(x = hazard_ratio, y = phecode_label, color = time)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = hazard_ratio_low, xmax = hazard_ratio_high), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.9, 2.2)) +
+    labs(title = "Incident associations", x = "HR (per 0.01 DHRPS higher)", y = NULL, color = "Time window") +
+    theme_minimal() +
+    scale_color_manual(values = time_palette) +
+    theme(
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(size = 8),
+        axis.title.x = element_text(size = 8, margin = margin(t = -60)),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+
+# Heatmap - daily heart rate per step - prevalent
+logistic_time_comparisons_dhrps <- logistic_combined_top %>%
+    filter(metric == "dhrps") %>%
+    pivot_wider(
+        id_cols = phecode_string,
+        names_from = time,
+        values_from = c(beta, standard_error)
+    ) %>%
+    mutate(
+        # Day v week
+        day_week_z = (beta_Day - beta_Week) / sqrt(standard_error_Day^2 + standard_error_Week^2),
+        day_week_p = 2 * pnorm(-abs(day_week_z)),
+
+        # Day v month
+        day_month_z = (beta_Day - beta_Month) / sqrt(standard_error_Day^2 + standard_error_Month^2),
+        day_month_p = 2 * pnorm(-abs(day_month_z)),
+
+        # Day v six months
+        day_six_z = (beta_Day - `beta_Six months`) / sqrt(standard_error_Day^2 + `standard_error_Six months`^2),
+        day_six_p = 2 * pnorm(-abs(day_six_z)),
+
+        # Day v year
+        day_year_z = (beta_Day - beta_Year) / sqrt(standard_error_Day^2 + standard_error_Year^2),
+        day_year_p = 2 * pnorm(-abs(day_year_z)),
+
+        # Week v month
+        week_month_z = (beta_Week - beta_Month) / sqrt(standard_error_Week^2 + standard_error_Month^2),
+        week_month_p = 2 * pnorm(-abs(week_month_z)),
+
+        # Week v six months
+        week_six_z = (beta_Week - `beta_Six months`) / sqrt(standard_error_Week^2 + `standard_error_Six months`^2),
+        week_six_p = 2 * pnorm(-abs(week_six_z)),
+
+        # Week v year
+        week_year_z = (beta_Week - beta_Year) / sqrt(standard_error_Week^2 + standard_error_Year^2),
+        week_year_p = 2 * pnorm(-abs(week_year_z)),
+
+        # Month v six months
+        month_six_z = (beta_Month - `beta_Six months`) / sqrt(standard_error_Month^2 + `standard_error_Six months`^2),
+        month_six_p = 2 * pnorm(-abs(month_six_z)),
+
+        # Month v year
+        month_year_z = (beta_Month - beta_Year) / sqrt(standard_error_Month^2 + standard_error_Year^2),
+        month_year_p = 2 * pnorm(-abs(month_year_z)),
+
+        # Six months v year
+        six_year_z = (`beta_Six months` - beta_Year) / sqrt(`standard_error_Six months`^2 + standard_error_Year^2),
+        six_year_p = 2 * pnorm(-abs(six_year_z))
+    )
+
+df_heatmap_logistic_dhrps <- logistic_time_comparisons_dhrps %>%
+    select(phecode_string, ends_with("_p")) %>%
+    pivot_longer(
+        cols = -phecode_string,
+        names_to = "comparison",
+        values_to = "p"
+    ) %>%
+    mutate(
+        comparison = recode(
+            comparison,
+            day_week_p   = "Day vs Week",
+            day_month_p  = "Day vs Month",
+            day_six_p    = "Day vs Six months",
+            day_year_p   = "Day vs Year",
+            week_month_p = "Week vs Month",
+            week_six_p   = "Week vs Six months",
+            week_year_p  = "Week vs Year",
+            month_six_p  = "Month vs Six months",
+            month_year_p = "Month vs Year",
+            six_year_p   = "Six months vs Year"
+        ),
+        comparison = factor(
+            comparison,
+            levels = c(
+                "Day vs Week",
+                "Day vs Month",
+                "Day vs Six months",
+                "Day vs Year",
+                "Week vs Month",
+                "Week vs Six months",
+                "Week vs Year",
+                "Month vs Six months",
+                "Month vs Year",
+                "Six months vs Year"
+            )
+        ),
+        neglog10p = -log10(p)
+    )
+
+heatmap_logistic_dhrps <- ggplot(df_heatmap_logistic_dhrps,
+       aes(x = comparison, y = phecode_string, fill = neglog10p)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient(low = "#D5D5D5", high = "#49525E", na.value = "grey90", limits = c(0, 15)) +
+    labs(x = NULL, y = NULL, fill = expression("Z-score " * -log[10](p))) +
+    theme_minimal() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        axis.text.y = element_blank(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)
+    )
+
+# Heatmap - daily heart rate per step - incident
+cox_time_comparisons_dhrps <- cox_combined_top %>%
+    filter(metric == "dhrps") %>%
+    pivot_wider(
+        id_cols = phecode_string,
+        names_from = time,
+        values_from = c(log_hazard_ratio, standard_error)
+    ) %>%
+    mutate(
+        # Day v week
+        day_week_z = (log_hazard_ratio_Day - log_hazard_ratio_Week) / sqrt(standard_error_Day^2 + standard_error_Week^2),
+        day_week_p = 2 * pnorm(-abs(day_week_z)),
+
+        # Day v month
+        day_month_z = (log_hazard_ratio_Day - log_hazard_ratio_Month) / sqrt(standard_error_Day^2 + standard_error_Month^2),
+        day_month_p = 2 * pnorm(-abs(day_month_z)),
+
+        # Day v six months
+        day_six_z = (log_hazard_ratio_Day - `log_hazard_ratio_Six months`) / sqrt(standard_error_Day^2 + `standard_error_Six months`^2),
+        day_six_p = 2 * pnorm(-abs(day_six_z)),
+
+        # Day v year
+        day_year_z = (log_hazard_ratio_Day - log_hazard_ratio_Year) / sqrt(standard_error_Day^2 + standard_error_Year^2),
+        day_year_p = 2 * pnorm(-abs(day_year_z)),
+
+        # Week v month
+        week_month_z = (log_hazard_ratio_Week - log_hazard_ratio_Month) / sqrt(standard_error_Week^2 + standard_error_Month^2),
+        week_month_p = 2 * pnorm(-abs(week_month_z)),
+
+        # Week v six months
+        week_six_z = (log_hazard_ratio_Week - `log_hazard_ratio_Six months`) / sqrt(standard_error_Week^2 + `standard_error_Six months`^2),
+        week_six_p = 2 * pnorm(-abs(week_six_z)),
+
+        # Week v year
+        week_year_z = (log_hazard_ratio_Week - log_hazard_ratio_Year) / sqrt(standard_error_Week^2 + standard_error_Year^2),
+        week_year_p = 2 * pnorm(-abs(week_year_z)),
+
+        # Month v six months
+        month_six_z = (log_hazard_ratio_Month - `log_hazard_ratio_Six months`) / sqrt(standard_error_Month^2 + `standard_error_Six months`^2),
+        month_six_p = 2 * pnorm(-abs(month_six_z)),
+
+        # Month v year
+        month_year_z = (log_hazard_ratio_Month - log_hazard_ratio_Year) / sqrt(standard_error_Month^2 + standard_error_Year^2),
+        month_year_p = 2 * pnorm(-abs(month_year_z)),
+
+        # Six months v year
+        six_year_z = (`log_hazard_ratio_Six months` - log_hazard_ratio_Year) / sqrt(`standard_error_Six months`^2 + standard_error_Year^2),
+        six_year_p = 2 * pnorm(-abs(six_year_z))
+    )
+
+df_heatmap_cox_dhrps <- cox_time_comparisons_dhrps %>%
+    select(phecode_string, ends_with("_p")) %>%
+    pivot_longer(
+        cols = -phecode_string,
+        names_to = "comparison",
+        values_to = "p"
+    ) %>%
+    mutate(
+        comparison = recode(
+            comparison,
+            day_week_p   = "Day vs Week",
+            day_month_p  = "Day vs Month",
+            day_six_p    = "Day vs Six months",
+            day_year_p   = "Day vs Year",
+            week_month_p = "Week vs Month",
+            week_six_p   = "Week vs Six months",
+            week_year_p  = "Week vs Year",
+            month_six_p  = "Month vs Six months",
+            month_year_p = "Month vs Year",
+            six_year_p   = "Six months vs Year"
+        ),
+        comparison = factor(
+            comparison,
+            levels = c(
+                "Day vs Week",
+                "Day vs Month",
+                "Day vs Six months",
+                "Day vs Year",
+                "Week vs Month",
+                "Week vs Six months",
+                "Week vs Year",
+                "Month vs Six months",
+                "Month vs Year",
+                "Six months vs Year"
+            )
+        ),
+        neglog10p = -log10(p)
+    )
+
+heatmap_cox_dhrps <- ggplot(df_heatmap_cox_dhrps,
+       aes(x = comparison, y = phecode_string, fill = neglog10p)) +
+    geom_tile(color = "white") +
+    scale_fill_gradient(low = "#D5D5D5", high = "#49525E", na.value = "grey90", limits = c(0, 15)) +
+    labs(x = NULL, y = NULL, fill = expression("Z-score " * -log[10](p))) +
+    theme_minimal() +
+    theme(
+        axis.text.x = element_text(angle = 45, hjust = 1, size = 9),
+        axis.text.y = element_blank(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8)
+    )
+```
+
+```{r}
+fp_heat_dhrps <- fp_logistic_dhrps + heatmap_logistic_dhrps + fp_cox_dhrps + heatmap_cox_dhrps +
+  plot_layout(
+    ncol = 4,
+    widths = c(1.5, 1, 1.5, 1),
+     guides = "collect"
+  ) &
+  theme(legend.position = "right")
+```
+
+```{r}
+fp_heat_dhrps
+
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/fp_heat_dhrps.png", width = 14, height = 8, units = "in", res = 400)
+fp_heat_dhrps
+dev.off()
+```
+
+## Supplementary Figure 8 - Venn diagram
+
+```{r}
+# Pull Bonferroni-significant phecodes for each dataframe
+get_bonf_list <- function(df, alpha = 0.05) {
+  thr <- alpha / n_distinct(df$phecode)
+  df %>%
+    filter(p_value <= thr) %>%
+    distinct(phecode) %>%
+    pull(phecode)
+}
+
+# Pull for each model
+logistic_day_steps_bonf <- get_bonf_list(logistic_day_steps)
+logistic_week_steps_bonf <- get_bonf_list(logistic_week_steps)
+logistic_month_steps_bonf <- get_bonf_list(logistic_month_steps)
+logistic_six_steps_bonf <- get_bonf_list(logistic_six_steps)
+logistic_year_steps_bonf <- get_bonf_list(logistic_year_steps)
+
+logistic_day_cadence1_bonf <- get_bonf_list(logistic_day_cadence1)
+logistic_week_cadence1_bonf <- get_bonf_list(logistic_week_cadence1)
+logistic_month_cadence1_bonf <- get_bonf_list(logistic_month_cadence1)
+logistic_six_cadence1_bonf <- get_bonf_list(logistic_six_cadence1)
+logistic_year_cadence1_bonf <- get_bonf_list(logistic_year_cadence1)
+
+logistic_day_cadence30_bonf <- get_bonf_list(logistic_day_cadence30)
+logistic_week_cadence30_bonf <- get_bonf_list(logistic_week_cadence30)
+logistic_month_cadence30_bonf <- get_bonf_list(logistic_month_cadence30)
+logistic_six_cadence30_bonf <- get_bonf_list(logistic_six_cadence30)
+logistic_year_cadence30_bonf <- get_bonf_list(logistic_year_cadence30)
+
+logistic_day_dhrps_bonf <- get_bonf_list(logistic_day_dhrps)
+logistic_week_dhrps_bonf <- get_bonf_list(logistic_week_dhrps)
+logistic_month_dhrps_bonf <- get_bonf_list(logistic_month_dhrps)
+logistic_six_dhrps_bonf <- get_bonf_list(logistic_six_dhrps)
+logistic_year_dhrps_bonf <- get_bonf_list(logistic_year_dhrps)
+
+cox_day_steps_bonf <- get_bonf_list(cox_day_steps)
+cox_week_steps_bonf <- get_bonf_list(cox_week_steps)
+cox_month_steps_bonf <- get_bonf_list(cox_month_steps)
+cox_six_steps_bonf <- get_bonf_list(cox_six_steps)
+cox_year_steps_bonf <- get_bonf_list(cox_year_steps)
+
+cox_day_cadence1_bonf <- get_bonf_list(cox_day_cadence1)
+cox_week_cadence1_bonf <- get_bonf_list(cox_week_cadence1)
+cox_month_cadence1_bonf <- get_bonf_list(cox_month_cadence1)
+cox_six_cadence1_bonf <- get_bonf_list(cox_six_cadence1)
+cox_year_cadence1_bonf <- get_bonf_list(cox_year_cadence1)
+
+cox_day_cadence30_bonf <- get_bonf_list(cox_day_cadence30)
+cox_week_cadence30_bonf <- get_bonf_list(cox_week_cadence30)
+cox_month_cadence30_bonf <- get_bonf_list(cox_month_cadence30)
+cox_six_cadence30_bonf <- get_bonf_list(cox_six_cadence30)
+cox_year_cadence30_bonf <- get_bonf_list(cox_year_cadence30)
+
+cox_day_dhrps_bonf <- get_bonf_list(cox_day_dhrps)
+cox_week_dhrps_bonf <- get_bonf_list(cox_week_dhrps)
+cox_month_dhrps_bonf <- get_bonf_list(cox_month_dhrps)
+cox_six_dhrps_bonf <- get_bonf_list(cox_six_dhrps)
+cox_year_dhrps_bonf <- get_bonf_list(cox_year_dhrps)
+
+# Turn into a list
+logistic_steps_venn <- list(
+  Day   = logistic_day_steps_bonf,
+  Week  = logistic_week_steps_bonf,
+  Month = logistic_month_steps_bonf,
+  Six   = logistic_six_steps_bonf,
+  Year  = logistic_year_steps_bonf
+)
+
+logistic_cadence1_venn <- list(
+  Day   = logistic_day_cadence1_bonf,
+  Week  = logistic_week_cadence1_bonf,
+  Month = logistic_month_cadence1_bonf,
+  Six   = logistic_six_cadence1_bonf,
+  Year  = logistic_year_cadence1_bonf
+)
+
+logistic_cadence30_venn <- list(
+  Day   = logistic_day_cadence30_bonf,
+  Week  = logistic_week_cadence30_bonf,
+  Month = logistic_month_cadence30_bonf,
+  Six   = logistic_six_cadence30_bonf,
+  Year  = logistic_year_cadence30_bonf
+)
+
+logistic_dhrps_venn <- list(
+  Day   = logistic_day_dhrps_bonf,
+  Week  = logistic_week_dhrps_bonf,
+  Month = logistic_month_dhrps_bonf,
+  Six   = logistic_six_dhrps_bonf,
+  Year  = logistic_year_dhrps_bonf
+)
+
+cox_steps_venn <- list(
+  Day   = cox_day_steps_bonf,
+  Week  = cox_week_steps_bonf,
+  Month = cox_month_steps_bonf,
+  Six   = cox_six_steps_bonf,
+  Year  = cox_year_steps_bonf
+)
+
+cox_cadence1_venn <- list(
+  Day   = cox_day_cadence1_bonf,
+  Week  = cox_week_cadence1_bonf,
+  Month = cox_month_cadence1_bonf,
+  Six   = cox_six_cadence1_bonf,
+  Year  = cox_year_cadence1_bonf
+)
+
+cox_cadence30_venn <- list(
+  Day   = cox_day_cadence30_bonf,
+  Week  = cox_week_cadence30_bonf,
+  Month = cox_month_cadence30_bonf,
+  Six   = cox_six_cadence30_bonf,
+  Year  = cox_year_cadence30_bonf
+)
+
+cox_dhrps_venn <- list(
+  Day   = cox_day_dhrps_bonf,
+  Week  = cox_week_dhrps_bonf,
+  Month = cox_month_dhrps_bonf,
+  Six   = cox_six_dhrps_bonf,
+  Year  = cox_year_dhrps_bonf
+)
+```
+
+```{r}
+# Plot
+logistic_steps <- ggVennDiagram(
+  logistic_steps_venn,
+  label = "count",
+  label_alpha = 0,
+  label_size = 4
+) +
+    labs(title = "Prevalent - step count") +
+  scale_fill_gradient(low = "#F4FAFE", high = "#4981BF") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+logistic_cadence1 <- ggVennDiagram(
+  logistic_cadence1_venn,
+  label = "count",
+  label_alpha = 0,
+  label_size = 4
+) +
+    labs(title = "Prevalent - peak 1-min cadence") +
+  scale_fill_gradient(low = "#F4FAFE", high = "#4981BF") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+logistic_cadence30 <- ggVennDiagram(
+  logistic_cadence30_venn,
+  label = "count",
+  label_alpha = 0,
+  label_size = 4
+) +
+    labs(title = "Prevalent - peak 30-min cadence") +
+  scale_fill_gradient(low = "#F4FAFE", high = "#4981BF") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+logistic_dhrps <- ggVennDiagram(
+  logistic_dhrps_venn,
+  label = "count",
+  label_alpha = 0,
+  label_size = 4
+) +
+    labs(title = "Prevalent - daily heart rate per step") +
+  scale_fill_gradient(low = "#F4FAFE", high = "#4981BF") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+```
+
+```{r}
+# Plot
+cox_steps <- ggVennDiagram(
+  cox_steps_venn,
+  label = "count",
+  label_alpha = 0,
+  label_size = 4
+) +
+    labs(title = "Incident - step count") +
+  scale_fill_gradient(low = "#F4FAFE", high = "#4981BF") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+cox_cadence1 <- ggVennDiagram(
+  cox_cadence1_venn,
+  label = "count",
+  label_alpha = 0,
+  label_size = 4
+) +
+    labs(title = "Incident - peak 1-min cadence") +
+  scale_fill_gradient(low = "#F4FAFE", high = "#4981BF") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+cox_cadence30 <- ggVennDiagram(
+  cox_cadence30_venn,
+  label = "count",
+  label_alpha = 0,
+  label_size = 4
+) +
+    labs(title = "Incident - peak 30-min cadence") +
+  scale_fill_gradient(low = "#F4FAFE", high = "#4981BF") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+
+cox_dhrps <- ggVennDiagram(
+  cox_dhrps_venn,
+  label = "count",
+  label_alpha = 0,
+  label_size = 4
+) +
+    labs(title = "Incident - daily heart rate per step") +
+  scale_fill_gradient(low = "#F4FAFE", high = "#4981BF") +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5, face = "bold")
+  )
+```
+
+```{r}
+venn <- wrap_plots(
+  logistic_steps, logistic_cadence1, logistic_cadence30, logistic_dhrps,
+  cox_steps, cox_cadence1, cox_cadence30, cox_dhrps,
+  ncol = 4
+)
+```
+
+```{r}
+venn
+
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/venn.png", width = 17, height = 10, units = "in", res = 400)
+venn
+dev.off()
+```
+
+## Figure 4 - HR vs OR (step count)
+
+```{r}
+# Merge logistic regression and Cox regression results using the year time period
+merged_year_steps <- merge(logistic_year_steps, cox_year_steps, by = "phecode", suffixes = c("_logistic", "_cox"))
+
+merged_year_steps <- merged_year_steps %>%
+    mutate(
+        sig_category = factor(
+            case_when(
+                p_value_logistic < alpha_logistic & p_value_cox < alpha_cox_year ~ "Both prevalent and incident",
+                p_value_logistic < alpha_logistic & !(p_value_cox < alpha_cox_year) ~ "Prevalent only",
+                !(p_value_logistic < alpha_logistic) & p_value_cox < alpha_cox_year ~ "Incident only",
+                TRUE ~ "Neither"
+            ),
+            levels = c(
+                "Both prevalent and incident",
+                "Prevalent only",
+                "Incident only",
+                "Neither"
+            )
+        )
+    )
+
+# Create a list of phecodes to label
+phecode_list <- c(
+    "Actinic keratosis",
+    "Acute kidney failure",
+    "Acute respiratory failure",
+    "Allergy",
+    "Anemia",
+    "Atherosclerosis [ASCVD]",
+    "Atrial fibrillation",
+    "Autoimmune disease",
+    "Chronic fatigue syndrome",
+    "Chronic kidney disease",
+    "Chronic migraine without aura",
+    "Chronic nonalcoholic liver disease",
+    "Chronic obstructive pulmonary disease [COPD]",
+    "Chronic pain syndrome",
+    "Deep vein thrombosis [DVT]",
+    "Diastolic heart failure",
+    "Difficulty walking",
+    "Disorders of autonomic nervous system",
+    "Gallstones [Cholelithiasis]",
+    "Gastro-esophageal reflux disease [GERD]",
+    "Heart failure",
+    "Heart valve replaced",
+    "Hyperlipidemia",
+    "Hypertension",
+    "Ischemic heart disease",
+    "Kidney stone disease",
+    "Major depressive disorder",
+    "Mild cognitive impairment",
+    "Mood [affective] disorders",
+    "Myocardial infarction [Heart attack]",
+    "Obesity",
+    "Obstructive sleep apnea",
+    "Osteoarthritis",
+    "Pain in hip",
+    "Pain in knee",
+    "Presence of cardiac device",
+    "Proteinuria",
+    "Renal failure",
+    "Rheumatoid arthritis",
+    "Skin changes due to solar radiation",
+    "Stroke",
+    "Type 2 diabetes",
+    "Vitamin deficiencies"
+)
+
+labels <- merged_year_steps %>%
+    filter(phecode_string_cox %in% phecode_list)
+
+# Plot
+steps_or_hr_plot <- ggplot(merged_year_steps, aes(x = hazard_ratio, y = odds_ratio)) +
+    geom_point(
+        data = subset(merged_year_steps, sig_category == "Neither"),
+        aes(size = cases_logistic + cases_cox),
+        color = "grey90", alpha = 0.8, shape = 16) +
+    geom_point(
+        data = subset(merged_year_steps, sig_category != "Neither"),
+        aes(color = sig_category, size = cases_logistic + cases_cox),
+        alpha = 0.8, shape = 16) +
+    geom_hline(yintercept = 1, linewidth = 0.3) +
+    geom_vline(xintercept = 1, linewidth = 0.3) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", linewidth = 0.3) +
+    geom_label_repel(
+        data = labels,
+        aes(label = phecode_string_cox, color = sig_category),
+            size = 2.5,
+            box.padding  = grid::unit(0.35, "lines"),
+            point.padding = grid::unit(0.2, "lines"),
+            label.padding = grid::unit(0.12, "lines"),
+            label.size = 0,
+            fill = "white",
+            alpha = 0.9,
+            max.overlaps = Inf,
+            force = 6,
+            force_pull = 0.4,
+            min.segment.length = 0,
+            segment.curvature = 0.1,
+            segment.ncp = 3,
+            segment.angle = 20,
+            show.legend = FALSE) +
+    scale_x_log10() +
+    scale_y_log10() +
+    scale_color_manual(
+        values = c("Both prevalent and incident" = "#000000",
+                   "Prevalent only" = "#2D6A9F",
+                   "Incident only" = "#EE8636"),
+        name = "Bonferroni significance") +
+    scale_size_area(max_size = 4, name = "Number of cases") +
+    labs(
+        x = "Hazard ratio (per 1000 step higher)",
+        y = "Odds ratio (per 1000 step higher)"
+    ) +
+    coord_fixed() +
+    theme_minimal() +
+    theme(
+        legend.position = "right",
+        panel.grid.minor = element_blank()
+    ) +
+    annotate("text", x = 0.97, y = 0.82,
+             label = "Biomarker-like\n|log(OR)| > |log(HR)|",
+             hjust = 1, vjust = 1, size = 3.5, color = "black") +
+    annotate("text", x = 0.7, y = 0.96,
+             label = "Risk factor-like\n|log(HR)| > |log(OR)|",
+             hjust = 0, vjust = 0, size = 3.5, color = "black")
+```
+
+```{r}
+steps_or_hr_plot
+
+png(filename = "~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/steps_or_hr_plot.png", width = 13, height = 7, units = "in", res = 1200)
+steps_or_hr_plot
+dev.off()
+```
+
+## Supplementary Figure 9 - HR vs OR
+
+### Peak 1-min cadence
+
+```{r}
+# Merge logistic regression and Cox regression results using the YEAR time period
+merged_year_cadence1 <- merge(logistic_year_cadence1, cox_year_cadence1, by = "phecode", suffixes = c("_logistic", "_cox"))
+
+merged_year_cadence1 <- merged_year_cadence1 %>%
+    mutate(
+        sig_category = factor(
+            case_when(
+                p_value_logistic < alpha_logistic & p_value_cox < alpha_cox_year ~ "Both prevalent and incident",
+                p_value_logistic < alpha_logistic & !(p_value_cox < alpha_cox_year) ~ "Prevalent only",
+                !(p_value_logistic < alpha_logistic) & p_value_cox < alpha_cox_year ~ "Incident only",
+                TRUE ~ "Neither"
+            ),
+            levels = c(
+                "Both prevalent and incident",
+                "Prevalent only",
+                "Incident only",
+                "Neither"
+            )
+        )
+    )
+
+# Create a list of phecodes to label
+phecode_list <- c(
+    "Iron deficiency anemia",
+    "Ischemic heart disease",
+    "Myocardial infarction [Heart attack]",
+    "Pulmonary heart disease",
+    "Tricuspid valve disorders",
+    "Atrial fibrillation",
+    "Systolic heart failure",
+    "Diastolic heart failure",
+    "Venous thromboembolism",
+    "Infection of the skin",
+    "Hypothyroidism",
+    "Type 2 diabetes",
+    "Malnutrition and underweight",
+    "Vitamin deficiencies",
+    "Morbid obesity",
+    "Mineral deficiencies",
+    "Chronic liver disease",
+    "Gallstones [Cholelithiasis]",
+    "Polycystic ovary syndrome",
+    "Sars-CoV-2*",
+    "Mood [affective] disorders",
+    "Major depressive disorder",
+    "Rheumatoid arthritis and other inflammatory polyarthropathies",
+    "Osteoarthritis",
+    "Pain in hip",
+    "Pain in knee",
+    "Fracture of lower limb",
+    "Difficulty walking",
+    "Memory loss",
+    "Obstructive sleep apnea",
+    "Respiratory infection",
+    "Chronic sinusitis",
+    "Chronic obstructive pulmonary disease [COPD]",
+    "Asthma",
+    "Abnormalities of breathing",
+    "Malaise and fatigue",
+    "Chronic pain syndrome",
+    "Symptomatic menopause",
+    "Benign neoplasm of the skin"
+)
+
+labels <- merged_year_cadence1 %>%
+    filter(phecode_string_cox %in% phecode_list)
+
+# Plot
+cadence1_or_hr_plot <- ggplot(merged_year_cadence1, aes(x = hazard_ratio, y = odds_ratio)) +
+    geom_point(
+        data = subset(merged_year_cadence1, sig_category == "Neither"),
+        aes(size = cases_logistic + cases_cox),
+        color = "grey90", alpha = 0.8, shape = 16) +
+    geom_point(
+        data = subset(merged_year_cadence1, sig_category != "Neither"),
+        aes(color = sig_category, size = cases_logistic + cases_cox),
+        alpha = 0.8, shape = 16) +
+    geom_hline(yintercept = 1, linewidth = 0.3) +
+    geom_vline(xintercept = 1, linewidth = 0.3) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", linewidth = 0.3) +
+    geom_label_repel(
+        data = labels,
+        aes(label = phecode_string_cox, color = sig_category),
+            size = 2.5,
+            box.padding  = grid::unit(0.35, "lines"),
+            point.padding = grid::unit(0.2, "lines"),
+            label.padding = grid::unit(0.12, "lines"),
+            label.size = 0,
+            fill = "white",
+            alpha = 0.9,
+            max.overlaps = Inf,
+            force = 6,
+            force_pull = 0.4,
+            min.segment.length = 0,
+            segment.curvature = 0.1,
+            segment.ncp = 3,
+            segment.angle = 20,
+            show.legend = FALSE) +
+    scale_x_log10() +
+    scale_y_log10() +
+    scale_color_manual(
+        values = c("Both prevalent and incident" = "#000000",
+                   "Prevalent only" = "#2D6A9F",
+                   "Incident only" = "#EE8636"),
+        name = "Bonferroni significance") +
+    scale_size_area(max_size = 6, name = "Number of cases") +
+    labs(
+        x = "Hazard ratio (per 10 steps/min higher)",
+        y = "Odds ratio (per 10 steps/min higher)"
+    ) +
+    coord_fixed() +
+    theme_minimal() +
+    theme(
+        legend.position = "right",
+        panel.grid.minor = element_blank()
+    ) +
+    annotate("text", x = 0.95, y = 0.7,
+             label = "Biomarker-like\n|log(OR)| > |log(HR)|",
+             hjust = 1, vjust = 1, size = 3.5, color = "black") +
+    annotate("text", x = 0.57, y = 0.95,
+             label = "Risk factor-like\n|log(HR)| > |log(OR)|",
+             hjust = 0, vjust = 0, size = 3.5, color = "black")
+```
+
+```{r}
+cadence1_or_hr_plot
+
+png(filename = "~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/cadence1_or_hr_plot.png", width = 13, height = 7, units = "in", res = 1200)
+cadence1_or_hr_plot
+dev.off()
+```
+
+### Peak 30-min cadence
+
+```{r}
+# Merge logistic regression and Cox regression results using the YEAR time period
+merged_year_cadence30 <- merge(logistic_year_cadence30, cox_year_cadence30, by = "phecode", suffixes = c("_logistic", "_cox"))
+
+merged_year_cadence30 <- merged_year_cadence30 %>%
+    mutate(
+        sig_category = factor(
+            case_when(
+                p_value_logistic < alpha_logistic & p_value_cox < alpha_cox_year ~ "Both prevalent and incident",
+                p_value_logistic < alpha_logistic & !(p_value_cox < alpha_cox_year) ~ "Prevalent only",
+                !(p_value_logistic < alpha_logistic) & p_value_cox < alpha_cox_year ~ "Incident only",
+                TRUE ~ "Neither"
+            ),
+            levels = c(
+                "Both prevalent and incident",
+                "Prevalent only",
+                "Incident only",
+                "Neither"
+            )
+        )
+    )
+
+# Create a list of phecodes to label
+phecode_list <- c(
+    "Tricuspid valve disorders",
+    "Iron deficiency anemia",
+    "Immunodeficiencies",
+    "Autoimmune disease",
+    "Benign neoplasm of the skin",
+    "Rheumatic heart disease",
+    "Essential hypertension",
+    "Myocardial infarction [Heart attack]",
+    "Atrial fibrillation",
+    "Systolic heart failure",
+    "Diastolic heart failure",
+    "Cerebral infarction [Ischemic stroke]",
+    "Deep vein thrombosis [DVT]",
+    "Actinic keratosis",
+    "Type 2 diabetes",
+    "Malnutrition and underweight",
+    "Vitamin deficiencies",
+    "Morbid obesity",
+    "Mineral deficiencies",
+    "Hernia",
+    "Gastrointestinal inflammation",
+    "Irritable bowel syndrome",
+    "Chronic liver disease",
+    "Chronic kidney disease",
+    "Polycystic ovary syndrome",
+    "Mood [affective] disorders",
+    "Major depressive disorder",
+    "Attention-deficit hyperactivity disorders",
+    "Gout",
+    "Rheumatoid arthritis",
+    "Osteoarthritis",
+    "Pain in knee",
+    "Mid back pain",
+    "Myalgia",
+    "Memory loss",
+    "Mild cognitive impairment",
+    "Migraine",
+    "Obstructive sleep apnea",
+    "Carpal tunnel syndrome",
+    "Respiratory infection",
+    "Chronic sinusitis",
+    "Chronic obstructive pulmonary disease [COPD]",
+    "Asthma",
+    "Chronic fatigue syndrome"
+)
+
+labels <- merged_year_cadence30 %>%
+    filter(phecode_string_cox %in% phecode_list)
+
+# Plot
+cadence30_or_hr_plot <- ggplot(merged_year_cadence30, aes(x = hazard_ratio, y = odds_ratio)) +
+    geom_point(
+        data = subset(merged_year_cadence30, sig_category == "Neither"),
+        aes(size = cases_logistic + cases_cox),
+        color = "grey90", alpha = 0.8, shape = 16) +
+    geom_point(
+        data = subset(merged_year_cadence30, sig_category != "Neither"),
+        aes(color = sig_category, size = cases_logistic + cases_cox),
+        alpha = 0.8, shape = 16) +
+    geom_hline(yintercept = 1, linewidth = 0.3) +
+    geom_vline(xintercept = 1, linewidth = 0.3) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", linewidth = 0.3) +
+    geom_label_repel(
+        data = labels,
+        aes(label = phecode_string_cox, color = sig_category),
+            size = 2.5,
+            box.padding  = grid::unit(0.35, "lines"),
+            point.padding = grid::unit(0.2, "lines"),
+            label.padding = grid::unit(0.12, "lines"),
+            label.size = 0,
+            fill = "white",
+            alpha = 0.9,
+            max.overlaps = Inf,
+            force = 6,
+            force_pull = 0.4,
+            min.segment.length = 0,
+            segment.curvature = 0.1,
+            segment.ncp = 3,
+            segment.angle = 20,
+            show.legend = FALSE) +
+    scale_x_log10() +
+    scale_y_log10() +
+    scale_color_manual(
+        values = c("Both prevalent and incident" = "#000000",
+                   "Prevalent only" = "#2D6A9F",
+                   "Incident only" = "#EE8636"),
+        name = "Bonferroni significance") +
+    scale_size_area(max_size = 6, name = "Number of cases") +
+    labs(
+        x = "Hazard ratio (per 10 steps/min higher)",
+        y = "Odds ratio (per 10 steps/min higher)"
+    ) +
+    coord_fixed() +
+    theme_minimal() +
+    theme(
+        legend.position = "right",
+        panel.grid.minor = element_blank()
+    ) +
+    annotate("text", x = 0.95, y = 0.7,
+             label = "Biomarker-like\n|log(OR)| > |log(HR)|",
+             hjust = 1, vjust = 1, size = 3.5, color = "black") +
+    annotate("text", x = 0.57, y = 0.95,
+             label = "Risk factor-like\n|log(HR)| > |log(OR)|",
+             hjust = 0, vjust = 0, size = 3.5, color = "black")
+```
+
+```{r}
+cadence30_or_hr_plot
+
+png(filename = "~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/cadence30_or_hr_plot.png", width = 13, height = 7, units = "in", res = 1200)
+cadence30_or_hr_plot
+dev.off()
+```
+
+### Daily heart rate per step
+
+```{r}
+# Merge logistic regression and Cox regression results using the YEAR time period
+merged_year_dhrps <- merge(logistic_year_dhrps, cox_year_dhrps, by = "phecode", suffixes = c("_logistic", "_cox"))
+
+merged_year_dhrps <- merged_year_dhrps %>%
+    mutate(
+        sig_category = factor(
+            case_when(
+                p_value_logistic < alpha_logistic & p_value_cox < alpha_cox_year ~ "Both prevalent and incident",
+                p_value_logistic < alpha_logistic & !(p_value_cox < alpha_cox_year) ~ "Prevalent only",
+                !(p_value_logistic < alpha_logistic) & p_value_cox < alpha_cox_year ~ "Incident only",
+                TRUE ~ "Neither"
+            ),
+            levels = c(
+                "Both prevalent and incident",
+                "Prevalent only",
+                "Incident only",
+                "Neither"
+            )
+        )
+    )
+
+# Create a list of phecodes to label
+phecode_list <- c(
+    "Iron deficiency anemia",
+    "Immunodeficiencies",
+    "Malignant neoplasm of the skin",
+    "Essential hypertension",
+    "Myocardial infarction [Heart attack]",
+    "Cardiomyopathy",
+    "Atrial fibrillation",
+    "Systolic heart failure",
+    "Diastolic heart failure",
+    "Cerebral infarction [Ischemic stroke]",
+    "Deep vein thrombosis [DVT]",
+    "Skin changes due to solar radiation",
+    "Type 2 diabetes",
+    "Malnutrition and underweight",
+    "Vitamin deficiencies",
+    "Morbid obesity",
+    "Hypercholesterolemia",
+    "Mineral deficiencies",
+    "Irritable bowel syndrome",
+    "Chronic liver disease",
+    "Chronic kidney disease",
+    "Polycystic ovary syndrome",
+    "Symptomatic menopause",
+    "Mood [affective] disorders",
+    "Major depressive disorder",
+    "Rheumatoid arthritis",
+    "Osteoarthritis",
+    "Myalgia",
+    "Abnormality of gait and mobility",
+    "Migraine",
+    "Obstructive sleep apnea",
+    "Chronic obstructive pulmonary disease [COPD]",
+    "Emphysema",
+    "Dyspnea [Shortness of breath]",
+    "Malaise and fatigue",
+    "Chronic pain syndrome",
+    "Pain in leg*",
+    "Abnormal findings on examination of blood"
+)
+
+labels <- merged_year_dhrps %>%
+    filter(phecode_string_cox %in% phecode_list)
+
+# Plot
+dhrps_or_hr_plot <- ggplot(merged_year_dhrps, aes(x = hazard_ratio, y = odds_ratio)) +
+    geom_point(
+        data = subset(merged_year_dhrps, sig_category == "Neither"),
+        aes(size = cases_logistic + cases_cox),
+        color = "grey90", alpha = 0.8, shape = 16) +
+    geom_point(
+        data = subset(merged_year_dhrps, sig_category != "Neither"),
+        aes(color = sig_category, size = cases_logistic + cases_cox),
+        alpha = 0.8, shape = 16) +
+    geom_hline(yintercept = 1, linewidth = 0.3) +
+    geom_vline(xintercept = 1, linewidth = 0.3) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", linewidth = 0.3) +
+    geom_label_repel(
+        data = labels,
+        aes(label = phecode_string_cox, color = sig_category),
+            size = 2.5,
+            box.padding  = grid::unit(0.35, "lines"),
+            point.padding = grid::unit(0.2, "lines"),
+            label.padding = grid::unit(0.12, "lines"),
+            label.size = 0,
+            fill = "white",
+            alpha = 0.9,
+            max.overlaps = Inf,
+            force = 6,
+            force_pull = 0.4,
+            min.segment.length = 0,
+            segment.curvature = 0.1,
+            segment.ncp = 3,
+            segment.angle = 20,
+            show.legend = FALSE) +
+    scale_x_log10(breaks = c(0.7, 1.0, 1.5)) +
+    scale_y_log10(breaks = c(0.7, 1.0, 1.5)) +
+    scale_color_manual(
+        values = c("Both prevalent and incident" = "#000000",
+                   "Prevalent only" = "#2D6A9F",
+                   "Incident only" = "#EE8636"),
+        name = "Bonferroni significance") +
+    scale_size_area(max_size = 6, name = "Number of cases") +
+    labs(
+        x = "Hazard ratio (per 0.01 DHRPS higher)",
+        y = "Odds ratio (per 0.01 DHRPS higher)"
+    ) +
+    coord_fixed() +
+    theme_minimal() +
+    theme(
+        legend.position = "right",
+        panel.grid.minor = element_blank()
+    ) +
+    annotate("text", x = 1.2, y = 1.55,
+             label = "Biomarker-like\n|log(OR)| > |log(HR)|",
+             hjust = 1, vjust = 1, size = 3.5, color = "black") +
+    annotate("text", x = 1.55, y = 1.04,
+             label = "Risk factor-like\n|log(HR)| > |log(OR)|",
+             hjust = 0, vjust = 0, size = 3.5, color = "black")
+```
+
+```{r}
+dhrps_or_hr_plot
+
+png(filename = "~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/dhrps_or_hr_plot.png", width = 13, height = 7, units = "in", res = 1200)
+dhrps_or_hr_plot
+dev.off()
+```
+
+## Supplementary Figure 10 - Sensitivity analyses
+
+```{r}
+logistic_year_steps_bmi <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_steps_bmi.tsv")
+logistic_year_cadence1_bmi <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_cadence1_bmi.tsv")
+logistic_year_cadence30_bmi <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_cadence30_bmi.tsv")
+logistic_year_dhrps_bmi <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_dhrps_bmi.tsv")
+
+cox_year_steps_bmi <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_steps_bmi.tsv")
+cox_year_cadence1_bmi <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_cadence1_bmi.tsv")
+cox_year_cadence30_bmi <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_cadence30_bmi.tsv")
+cox_year_dhrps_bmi <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_dhrps_bmi.tsv")
+
+logistic_year_steps_washout <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_steps_washout.tsv")
+logistic_year_cadence1_washout <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_cadence1_washout.tsv")
+logistic_year_cadence30_washout <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_cadence30_washout.tsv")
+logistic_year_dhrps_washout <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_dhrps_washout.tsv")
+
+cox_year_steps_washout <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_steps_washout.tsv")
+cox_year_cadence1_washout <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_cadence1_washout.tsv")
+cox_year_cadence30_washout <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_cadence30_washout.tsv")
+cox_year_dhrps_washout <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_dhrps_washout.tsv")
+
+logistic_year_steps_one <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_steps_one.tsv")
+logistic_year_cadence1_one <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_cadence1_one.tsv")
+logistic_year_cadence30_one <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_cadence30_one.tsv")
+logistic_year_dhrps_one <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_dhrps_one.tsv")
+
+cox_year_steps_one <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_steps_one.tsv")
+cox_year_cadence1_one <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_cadence1_one.tsv")
+cox_year_cadence30_one <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_cadence30_one.tsv")
+cox_year_dhrps_one <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_dhrps_one.tsv")
+
+logistic_year_steps_three <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_steps_three.tsv")
+logistic_year_cadence1_three <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_cadence1_three.tsv")
+logistic_year_cadence30_three <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_cadence30_three.tsv")
+logistic_year_dhrps_three <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_logistic_year_dhrps_three.tsv")
+
+cox_year_steps_three <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_steps_three.tsv")
+cox_year_cadence1_three <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_cadence1_three.tsv")
+cox_year_cadence30_three <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_cadence30_three.tsv")
+cox_year_dhrps_three <- read_tsv("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/phewas_results-sensitivity/phewas_cox_year_dhrps_three.tsv")
+```
+
+### Step count
+
+```{r}
+# Combine all sensitivity analyses into one dataframe
+sensitivity_cox <- bind_rows(
+    mutate(cox_year_steps, analysis = "Main"),
+    mutate(cox_year_steps_bmi, analysis = "BMI"),
+    mutate(cox_year_steps_washout, analysis = "Washout"),
+    mutate(cox_year_steps_one, analysis = "One year Fitbit"),
+    mutate(cox_year_steps_three, analysis = "First three years excluded")
+) %>%
+    mutate(analysis = factor(analysis, levels = c("Main",
+                                                  "BMI",
+                                                  "Washout",
+                                                  "One year Fitbit",
+                                                  "First three years excluded")
+                            )
+          )
+
+sensitivity_logistic <- bind_rows(
+    mutate(logistic_year_steps, analysis = "Main"),
+    mutate(logistic_year_steps_bmi, analysis = "BMI"),
+    mutate(logistic_year_steps_washout, analysis = "Washout"),
+    mutate(logistic_year_steps_one, analysis = "One year Fitbit"),
+    mutate(logistic_year_steps_three, analysis = "First three years excluded")
+) %>%
+    mutate(analysis = factor(analysis, levels = c("Main",
+                                                  "BMI",
+                                                  "Washout",
+                                                  "One year Fitbit",
+                                                  "First three years excluded")
+                            )
+          ) 
+
+# Filter to top associations
+sensitivity_logistic_top <- sensitivity_logistic %>%
+    filter(phecode %in% keep_logistic | phecode %in% keep_cox)
+
+sensitivity_cox_top <- sensitivity_cox %>%
+    filter(phecode %in% keep_cox | phecode %in% keep_logistic)
+
+# Remove trailing * from phecode_string
+sensitivity_logistic_top <- sensitivity_logistic_top %>%
+    mutate(phecode_string = sub("\\*+$", "", phecode_string))
+
+sensitivity_cox_top <- sensitivity_cox_top %>%
+    mutate(phecode_string = sub("\\*+$", "", phecode_string))
+
+# Define color palette
+sens_palette <- c(
+  "Main" = "black", "BMI" = "#798861", "Washout" = "#A8BDB5",
+  "One year Fitbit" = "#8DA4BE", "First three years excluded" = "#A0C6DC"
+)
+
+
+# Create phecode label to note novel associations - novel phecodes bolded using markdown
+sensitivity_logistic_top <- sensitivity_logistic_top %>%
+    mutate(phecode_label = if_else(
+        phecode_string %in% novel,
+        paste0("**", phecode_string, "**"),
+        phecode_string
+    )
+)
+
+sensitivity_cox_top <- sensitivity_cox_top %>%
+    mutate(phecode_label = if_else(
+        phecode_string %in% novel,
+        paste0("**", phecode_string, "**"),
+        phecode_string
+    )
+)
+
+# Define phecode ordering
+sensitivity_logistic_top <- sensitivity_logistic_top %>%
+    mutate(phecode_label = factor(phecode_label, levels = logistic_phecode_order))
+
+sensitivity_cox_top <- sensitivity_cox_top %>%
+    mutate(phecode_label = factor(phecode_label, levels = cox_phecode_order))
+
+# Create forest plots
+
+## Step count - prevalent   
+fp_logistic_steps_sens <- ggplot(sensitivity_logistic_top, aes(x = odds_ratio, y = phecode_label, color = analysis)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = exp(conf_int_1), xmax = exp(conf_int_2)), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.65, 1.05)) +
+    labs(title = "Prevalent associations", x = "OR (per 1,000 steps higher)", y = NULL, color = "Sensitivity analysis") +
+    theme_minimal() +
+    scale_color_manual(values = sens_palette) +
+    theme(
+        axis.text.y = element_markdown(size = 10),
+        axis.text.x = element_text(size = 10),
+        axis.title.x = element_text(size = 10),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+    
+## Step count - incident   
+fp_cox_steps_sens <- ggplot(sensitivity_cox_top, aes(x = hazard_ratio, y = phecode_label, color = analysis)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = hazard_ratio_low, xmax = hazard_ratio_high), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.65, 1.05)) +
+    labs(title = "Incident associations", x = "HR (per 1,000 steps higher)", y = NULL, color = "Sensitivity analysis") +
+    theme_minimal() +
+    scale_color_manual(values = sens_palette) +
+    theme(
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(size = 10),
+        axis.title.x = element_text(size = 10),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+```
+
+```{r}
+sens_plot_steps <-
+    (fp_logistic_steps_sens + fp_cox_steps_sens) +
+    plot_layout(
+        ncol = 2,
+        guides = "collect",
+        axes = "collect"
+    )
+```
+
+```{r}
+sens_plot_steps
+
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/sens_plot_steps.png", width = 11, height = 11, units = "in", res = 400)
+sens_plot_steps
+dev.off()
+```
+
+### Peak 1-min cadence
+
+```{r}
+# Combine all sensitivity analyses into one dataframe
+sensitivity_cox <- bind_rows(
+    mutate(cox_year_cadence1, analysis = "Main"),
+    mutate(cox_year_cadence1_bmi, analysis = "BMI"),
+    mutate(cox_year_cadence1_washout, analysis = "Washout"),
+    mutate(cox_year_cadence1_one, analysis = "One year Fitbit"),
+    mutate(cox_year_cadence1_three, analysis = "First three years excluded")
+) %>%
+    mutate(analysis = factor(analysis, levels = c("Main",
+                                                  "BMI",
+                                                  "Washout",
+                                                  "One year Fitbit",
+                                                  "First three years excluded")
+                            )
+          )
+
+sensitivity_logistic <- bind_rows(
+    mutate(logistic_year_cadence1, analysis = "Main"),
+    mutate(logistic_year_cadence1_bmi, analysis = "BMI"),
+    mutate(logistic_year_cadence1_washout, analysis = "Washout"),
+    mutate(logistic_year_cadence1_one, analysis = "One year Fitbit"),
+    mutate(logistic_year_cadence1_three, analysis = "First three years excluded")
+) %>%
+    mutate(analysis = factor(analysis, levels = c("Main",
+                                                  "BMI",
+                                                  "Washout",
+                                                  "One year Fitbit",
+                                                  "First three years excluded")
+                            )
+          ) 
+
+# Filter to top associations
+sensitivity_logistic_top <- sensitivity_logistic %>%
+    filter(phecode %in% keep_logistic | phecode %in% keep_cox)
+
+sensitivity_cox_top <- sensitivity_cox %>%
+    filter(phecode %in% keep_cox | phecode %in% keep_logistic)
+
+# Remove trailing * from phecode_string
+sensitivity_logistic_top <- sensitivity_logistic_top %>%
+    mutate(phecode_string = sub("\\*+$", "", phecode_string))
+
+sensitivity_cox_top <- sensitivity_cox_top %>%
+    mutate(phecode_string = sub("\\*+$", "", phecode_string))
+
+# Define color palette
+sens_palette <- c(
+  "Main" = "black", "BMI" = "#798861", "Washout" = "#A8BDB5",
+  "One year Fitbit" = "#8DA4BE", "First three years excluded" = "#A0C6DC"
+)
+
+
+# Create phecode label to note novel associations - novel phecodes bolded using markdown
+sensitivity_logistic_top <- sensitivity_logistic_top %>%
+    mutate(phecode_label = if_else(
+        phecode_string %in% novel,
+        paste0("**", phecode_string, "**"),
+        phecode_string
+    )
+)
+
+sensitivity_cox_top <- sensitivity_cox_top %>%
+    mutate(phecode_label = if_else(
+        phecode_string %in% novel,
+        paste0("**", phecode_string, "**"),
+        phecode_string
+    )
+)
+
+# Define phecode ordering
+sensitivity_logistic_top <- sensitivity_logistic_top %>%
+    mutate(phecode_label = factor(phecode_label, levels = logistic_phecode_order))
+
+sensitivity_cox_top <- sensitivity_cox_top %>%
+    mutate(phecode_label = factor(phecode_label, levels = cox_phecode_order))
+
+# Create forest plots
+
+## Peak 1-min cadence - prevalent   
+fp_logistic_cadence1_sens <- ggplot(sensitivity_logistic_top, aes(x = odds_ratio, y = phecode_label, color = analysis)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = exp(conf_int_1), xmax = exp(conf_int_2)), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.45, 1.05)) +
+    labs(title = "Prevalent associations", x = "OR (per 10 steps/min higher)", y = NULL, color = "Sensitivity analysis") +
+    theme_minimal() +
+    scale_color_manual(values = sens_palette) +
+    theme(
+        axis.text.y = element_markdown(size = 10),
+        axis.text.x = element_text(size = 10),
+        axis.title.x = element_text(size = 10),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+    
+## Peak 1-min cadence - incident   
+fp_cox_cadence1_sens <- ggplot(sensitivity_cox_top, aes(x = hazard_ratio, y = phecode_label, color = analysis)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = hazard_ratio_low, xmax = hazard_ratio_high), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.45, 1.05)) +
+    labs(title = "Incident associations", x = "HR (per 10 steps/min higher)", y = NULL, color = "Sensitivity analysis") +
+    theme_minimal() +
+    scale_color_manual(values = sens_palette) +
+    theme(
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(size = 10),
+        axis.title.x = element_text(size = 10),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+```
+
+```{r}
+sens_plot_cadence1 <-
+    (fp_logistic_cadence1_sens + fp_cox_cadence1_sens) +
+    plot_layout(
+        ncol = 2,
+        guides = "collect",
+        axes = "collect"
+    )
+```
+
+```{r}
+sens_plot_cadence1
+
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/sens_plot_cadence1.png", width = 11, height = 11, units = "in", res = 400)
+sens_plot_cadence1
+dev.off()
+```
+
+### Peak 30-min cadence
+
+```{r}
+# Combine all sensitivity analyses into one dataframe
+sensitivity_cox <- bind_rows(
+    mutate(cox_year_cadence30, analysis = "Main"),
+    mutate(cox_year_cadence30_bmi, analysis = "BMI"),
+    mutate(cox_year_cadence30_washout, analysis = "Washout"),
+    mutate(cox_year_cadence30_one, analysis = "One year Fitbit"),
+    mutate(cox_year_cadence30_three, analysis = "First three years excluded")
+) %>%
+    mutate(analysis = factor(analysis, levels = c("Main",
+                                                  "BMI",
+                                                  "Washout",
+                                                  "One year Fitbit",
+                                                  "First three years excluded")
+                            )
+          )
+
+sensitivity_logistic <- bind_rows(
+    mutate(logistic_year_cadence30, analysis = "Main"),
+    mutate(logistic_year_cadence30_bmi, analysis = "BMI"),
+    mutate(logistic_year_cadence30_washout, analysis = "Washout"),
+    mutate(logistic_year_cadence30_one, analysis = "One year Fitbit"),
+    mutate(logistic_year_cadence30_three, analysis = "First three years excluded")
+) %>%
+    mutate(analysis = factor(analysis, levels = c("Main",
+                                                  "BMI",
+                                                  "Washout",
+                                                  "One year Fitbit",
+                                                  "First three years excluded")
+                            )
+          ) 
+
+# Filter to top associations
+sensitivity_logistic_top <- sensitivity_logistic %>%
+    filter(phecode %in% keep_logistic | phecode %in% keep_cox)
+
+sensitivity_cox_top <- sensitivity_cox %>%
+    filter(phecode %in% keep_cox | phecode %in% keep_logistic)
+
+# Remove trailing * from phecode_string
+sensitivity_logistic_top <- sensitivity_logistic_top %>%
+    mutate(phecode_string = sub("\\*+$", "", phecode_string))
+
+sensitivity_cox_top <- sensitivity_cox_top %>%
+    mutate(phecode_string = sub("\\*+$", "", phecode_string))
+
+# Define color palette
+sens_palette <- c(
+  "Main" = "black", "BMI" = "#798861", "Washout" = "#A8BDB5",
+  "One year Fitbit" = "#8DA4BE", "First three years excluded" = "#A0C6DC"
+)
+
+
+# Create phecode label to note novel associations - novel phecodes bolded using markdown
+sensitivity_logistic_top <- sensitivity_logistic_top %>%
+    mutate(phecode_label = if_else(
+        phecode_string %in% novel,
+        paste0("**", phecode_string, "**"),
+        phecode_string
+    )
+)
+
+sensitivity_cox_top <- sensitivity_cox_top %>%
+    mutate(phecode_label = if_else(
+        phecode_string %in% novel,
+        paste0("**", phecode_string, "**"),
+        phecode_string
+    )
+)
+
+# Define phecode ordering
+sensitivity_logistic_top <- sensitivity_logistic_top %>%
+    mutate(phecode_label = factor(phecode_label, levels = logistic_phecode_order))
+
+sensitivity_cox_top <- sensitivity_cox_top %>%
+    mutate(phecode_label = factor(phecode_label, levels = cox_phecode_order))
+
+# Create forest plots
+
+## Peak 30-min cadence - prevalent   
+fp_logistic_cadence30_sens <- ggplot(sensitivity_logistic_top, aes(x = odds_ratio, y = phecode_label, color = analysis)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = exp(conf_int_1), xmax = exp(conf_int_2)), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.5, 1.05)) +
+    labs(title = "Prevalent associations", x = "OR (per 10 steps/min higher)", y = NULL, color = "Sensitivity analysis") +
+    theme_minimal() +
+    scale_color_manual(values = sens_palette) +
+    theme(
+        axis.text.y = element_markdown(size = 10),
+        axis.text.x = element_text(size = 10),
+        axis.title.x = element_text(size = 10),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+    
+## Peak 30-min cadence - incident   
+fp_cox_cadence30_sens <- ggplot(sensitivity_cox_top, aes(x = hazard_ratio, y = phecode_label, color = analysis)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = hazard_ratio_low, xmax = hazard_ratio_high), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.5, 1.05)) +
+    labs(title = "Incident associations", x = "HR (per 10 steps/min higher)", y = NULL, color = "Sensitivity analysis") +
+    theme_minimal() +
+    scale_color_manual(values = sens_palette) +
+    theme(
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(size = 10),
+        axis.title.x = element_text(size = 10),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+```
+
+```{r}
+sens_plot_cadence30 <-
+    (fp_logistic_cadence30_sens + fp_cox_cadence30_sens) +
+    plot_layout(
+        ncol = 2,
+        guides = "collect",
+        axes = "collect"
+    )
+```
+
+```{r}
+sens_plot_cadence30
+
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/sens_plot_cadence30.png", width = 11, height = 11, units = "in", res = 400)
+sens_plot_cadence30
+dev.off()
+```
+
+### Daily heart rate per step
+
+```{r}
+# Combine all sensitivity analyses into one dataframe
+sensitivity_cox <- bind_rows(
+    mutate(cox_year_dhrps, analysis = "Main"),
+    mutate(cox_year_dhrps_bmi, analysis = "BMI"),
+    mutate(cox_year_dhrps_washout, analysis = "Washout"),
+    mutate(cox_year_dhrps_one, analysis = "One year Fitbit"),
+    mutate(cox_year_dhrps_three, analysis = "First three years excluded")
+) %>%
+    mutate(analysis = factor(analysis, levels = c("Main",
+                                                  "BMI",
+                                                  "Washout",
+                                                  "One year Fitbit",
+                                                  "First three years excluded")
+                            )
+          )
+
+sensitivity_logistic <- bind_rows(
+    mutate(logistic_year_dhrps, analysis = "Main"),
+    mutate(logistic_year_dhrps_bmi, analysis = "BMI"),
+    mutate(logistic_year_dhrps_washout, analysis = "Washout"),
+    mutate(logistic_year_dhrps_one, analysis = "One year Fitbit"),
+    mutate(logistic_year_dhrps_three, analysis = "First three years excluded")
+) %>%
+    mutate(analysis = factor(analysis, levels = c("Main",
+                                                  "BMI",
+                                                  "Washout",
+                                                  "One year Fitbit",
+                                                  "First three years excluded")
+                            )
+          ) 
+
+# Filter to top associations
+sensitivity_logistic_top <- sensitivity_logistic %>%
+    filter(phecode %in% keep_logistic | phecode %in% keep_cox)
+
+sensitivity_cox_top <- sensitivity_cox %>%
+    filter(phecode %in% keep_cox | phecode %in% keep_logistic)
+
+# Remove trailing * from phecode_string
+sensitivity_logistic_top <- sensitivity_logistic_top %>%
+    mutate(phecode_string = sub("\\*+$", "", phecode_string))
+
+sensitivity_cox_top <- sensitivity_cox_top %>%
+    mutate(phecode_string = sub("\\*+$", "", phecode_string))
+
+# Define color palette
+sens_palette <- c(
+  "Main" = "black", "BMI" = "#798861", "Washout" = "#A8BDB5",
+  "One year Fitbit" = "#8DA4BE", "First three years excluded" = "#A0C6DC"
+)
+
+
+# Create phecode label to note novel associations - novel phecodes bolded using markdown
+sensitivity_logistic_top <- sensitivity_logistic_top %>%
+    mutate(phecode_label = if_else(
+        phecode_string %in% novel,
+        paste0("**", phecode_string, "**"),
+        phecode_string
+    )
+)
+
+sensitivity_cox_top <- sensitivity_cox_top %>%
+    mutate(phecode_label = if_else(
+        phecode_string %in% novel,
+        paste0("**", phecode_string, "**"),
+        phecode_string
+    )
+)
+
+# Define phecode ordering
+sensitivity_logistic_top <- sensitivity_logistic_top %>%
+    mutate(phecode_label = factor(phecode_label, levels = logistic_phecode_order))
+
+sensitivity_cox_top <- sensitivity_cox_top %>%
+    mutate(phecode_label = factor(phecode_label, levels = cox_phecode_order))
+
+# Create forest plots
+
+## Daily heart rate per step - prevalent   
+fp_logistic_dhrps_sens <- ggplot(sensitivity_logistic_top, aes(x = odds_ratio, y = phecode_label, color = analysis)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = exp(conf_int_1), xmax = exp(conf_int_2)), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.8, 2.2)) +
+    labs(title = "Prevalent associations", x = "OR (per 0.01 DHRPS higher)", y = NULL, color = "Sensitivity analysis") +
+    theme_minimal() +
+    scale_color_manual(values = sens_palette) +
+    theme(
+        axis.text.y = element_markdown(size = 10),
+        axis.text.x = element_text(size = 10),
+        axis.title.x = element_text(size = 10),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+    
+## Daily heart rate per step - incident   
+fp_cox_dhrps_sens <- ggplot(sensitivity_cox_top, aes(x = hazard_ratio, y = phecode_label, color = analysis)) +
+    # Plotting
+    geom_point(shape = 15, size = 1.5, position = position_dodge(width = 0.4)) +
+    geom_errorbarh(aes(xmin = hazard_ratio_low, xmax = hazard_ratio_high), height = 0, position = position_dodge(width = 0.4)) +
+    geom_vline(xintercept = 1) +
+
+    # Aesthetics
+    guides(color = guide_legend(reverse = TRUE)) +
+    scale_x_log10(limits = c(0.8, 2.2)) +
+    labs(title = "Incident associations", x = "HR (per 0.01 DHRPS higher)", y = NULL, color = "Sensitivity analysis") +
+    theme_minimal() +
+    scale_color_manual(values = sens_palette) +
+    theme(
+        axis.text.y = element_blank(),
+        axis.text.x = element_text(size = 10),
+        axis.title.x = element_text(size = 10),
+        axis.ticks.x = element_line(),
+        axis.line.x = element_line(),
+        legend.text = element_text(size = 8),
+        legend.title = element_text(size = 8),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank()
+    )
+```
+
+```{r}
+sens_plot_dhrps <-
+    (fp_logistic_dhrps_sens + fp_cox_dhrps_sens) +
+    plot_layout(
+        ncol = 2,
+        guides = "collect",
+        axes = "collect"
+    )
+```
+
+```{r}
+sens_plot_dhrps
+
+png("~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/sens_plot_dhrps.png", width = 11, height = 11, units = "in", res = 400)
+sens_plot_dhrps
+dev.off()
+```
+
+
+# Tables
+
+These are presented in the same order as the corresponding manuscript.
+
+## Supplementary Table 1 - Definitions of included variables
+
+This table was made in Microsoft Word.
+
+## Table 1 - Baseline characteristics
+
+```{r}
+label(df_per_pid$age_t0) <- "Age of start of Fitbit phenotyping"
+label(df_per_pid$sex) <- "Sex"
+label(df_per_pid$race_eth) <- "Race/ethnicity"
+label(df_per_pid$alcohol) <- "Alcohol consumption"
+label(df_per_pid$smoking) <- "Smoking history"
+label(df_per_pid$income) <- "Annual income"
+label(df_per_pid$bmi_cat) <- "Body mass index"
+label(df_per_pid$wear_status) <- "WEAR vs. BYOD"
+label(df_per_pid$year_steps) <- "Year - step count"
+label(df_per_pid$year_cadence1) <- "Year - peak 1-min cadence"
+label(df_per_pid$year_cadence30) <- "Year - peak 30-min cadence"
+label(df_per_pid$year_dhrps) <- "Year - DHRPS"
+
+units(df_per_pid$age_t0) <- "years"
+```
+
+```{r}
+output <- table1(~ age_last_aou + age_t0 + sex + race_eth + alcohol + smoking + income + bmi_cat + year_steps + year_cadence1 + year_cadence30 + year_dhrps + as.factor(fitbit_year) | wear_status, 
+                 data = df_per_pid, 
+                 render.continuous=c("Median [IQR]"="Median [Q1, Q3]"))
+
+tab1 <- as.data.frame(output)
+head(tab1, n = 45)
+```
+
+```{r}
+write_excel_csv(tab1, '~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/table1.csv')
+```
+
+## Supplementary Table 2 - 
+
+```{r}
+label(df_per_pid$day_steps) <- "Day - step count"
+label(df_per_pid$day_cadence1) <- "Day - peak 1-min cadence"
+label(df_per_pid$day_cadence30) <- "Day - peak 30-min cadence"
+label(df_per_pid$day_dhrps) <- "Day - DHRPS"
+
+label(df_per_pid$week_steps) <- "Week - step count"
+label(df_per_pid$week_cadence1) <- "Week - peak 1-min cadence"
+label(df_per_pid$week_cadence30) <- "Week - peak 30-min cadence"
+label(df_per_pid$week_dhrps) <- "Week - DHRPS"
+
+label(df_per_pid$month_steps) <- "Month - step count"
+label(df_per_pid$month_cadence1) <- "Month - peak 1-min cadence"
+label(df_per_pid$month_cadence30) <- "Month - peak 30-min cadence"
+label(df_per_pid$month_dhrps) <- "Month - DHRPS"
+
+label(df_per_pid$six_steps) <- "Six months - step count"
+label(df_per_pid$six_cadence1) <- "Six months - peak 1-min cadence"
+label(df_per_pid$six_cadence30) <- "Six months - peak 30-min cadence"
+label(df_per_pid$six_dhrps) <- "Six months - DHRPS"
+
+label(df_per_pid$year_steps) <- "Year - step count"
+label(df_per_pid$year_cadence1) <- "Year - peak 1-min cadence"
+label(df_per_pid$year_cadence30) <- "Year - peak 30-min cadence"
+label(df_per_pid$year_dhrps) <- "Year - DHRPS"
+```
+
+```{r}
+output <- table1(~ day_steps + week_steps + month_steps + six_steps + year_steps + 
+                 day_cadence1 + week_cadence1 + month_cadence1 + six_cadence1 + 
+                 day_cadence30 + week_cadence30 + month_cadence30 + six_cadence30 + year_cadence1 + 
+                 day_dhrps + week_dhrps + month_dhrps + six_dhrps + year_cadence30 + year_dhrps | wear_status, 
+                 data = df_per_pid, 
+                 render.continuous=c("Median [IQR]"="Median [Q1, Q3]"))
+
+stab2 <- as.data.frame(output)
+head(stab2, n = 45)
+```
+
+```{r}
+write_excel_csv(stab2, '~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/stable2.csv')
+```
+
+## Supplementary Table 3 - Strength of correlations across activity metrics and time windows
+
+```{r}
+# --- Map each column to its metric group (suffix after " - ") ---
+groups <- setNames(
+  vapply(strsplit(colnames(cor_matrix), " - ", fixed = TRUE),
+         function(parts) trimws(tail(parts, 1)), character(1)),
+  colnames(cor_matrix)
+)
+
+# --- Map each column to its time horizon (prefix before " - ") ---
+time_groups <- setNames(
+  vapply(strsplit(colnames(cor_matrix), " - ", fixed = TRUE),
+         function(parts) trimws(head(parts, 1)), character(1)),
+  colnames(cor_matrix)
+)
+
+# Work with absolute correlations
+acor <- abs(cor_matrix)
+
+# --- Helpers ---
+upper_vals <- function(mat) {
+  mat[upper.tri(mat, diag = FALSE)]
+}
+
+corr_subset <- function(mat, group_a, group_b, groups_map) {
+  idx_a <- names(groups_map)[groups_map == group_a]
+  idx_b <- names(groups_map)[groups_map == group_b]
+  if (length(idx_a) == 0 || length(idx_b) == 0) return(numeric(0))
+
+  if (group_a == group_b) {
+    subm <- mat[idx_a, idx_a, drop = FALSE]
+    vals <- upper_vals(subm)
+  } else {
+    subm <- mat[idx_a, idx_b, drop = FALSE]
+    vals <- as.vector(subm)
+  }
+  as.numeric(vals)
+}
+
+# A vs "all others" based on metric groups
+corr_vs_others <- function(mat, group_a, groups_map) {
+  idx_a <- names(groups_map)[groups_map == group_a]
+  idx_other <- setdiff(colnames(mat), idx_a)
+  if (length(idx_a) == 0 || length(idx_other) == 0) return(numeric(0))
+  as.numeric(mat[idx_a, idx_other, drop = FALSE])
+}
+
+# Time horizon A vs "all other" horizons
+time_vs_others <- function(mat, time_a, time_map) {
+  idx_a <- names(time_map)[time_map == time_a]
+  idx_other <- setdiff(colnames(mat), idx_a)
+  if (length(idx_a) == 0 || length(idx_other) == 0) return(numeric(0))
+  as.numeric(mat[idx_a, idx_other, drop = FALSE])
+}
+
+summ_median_iqr <- function(x, digits = 2) {
+  x <- x[is.finite(x)]
+  if (length(x) == 0) return(NA_character_)
+  qs <- as.numeric(quantile(x, probs = c(0.25, 0.5, 0.75), na.rm = TRUE, names = FALSE))
+  sprintf(paste0("%.", digits, "f (", "%.", digits, "f–%.", digits, "f)"), qs[2], qs[1], qs[3])
+}
+
+# --- Metric group labels (must match suffixes in your colnames) ---
+grp_step   <- "step count"
+grp_cad1   <- "1-min cadence"
+grp_cad30  <- "30-min cadence"
+grp_dhrps  <- "DHRPS"
+
+# --- Time horizon labels (must match prefixes in your colnames) ---
+time_day   <- "Day"
+time_week  <- "Week"
+time_month <- "Month"
+time_six   <- "Six Months"
+time_year  <- "Year"
+
+# --- Build comparison vectors (ALL USE ABS CORRELATIONS) ---
+comparisons <- list(
+  "All correlations"                                   = upper_vals(acor),
+
+  # Within metric groups
+  "Step count (within)"                                = corr_subset(acor, grp_step,  grp_step,  groups),
+  "1-min cadence (within)"                             = corr_subset(acor, grp_cad1,  grp_cad1,  groups),
+  "30-min cadence (within)"                            = corr_subset(acor, grp_cad30, grp_cad30, groups),
+  "DHRPS (within)"                                     = corr_subset(acor, grp_dhrps, grp_dhrps, groups),
+
+  # Between specific metric groups
+  "Step–1-min cadence (between)"                       = corr_subset(acor, grp_step,  grp_cad1,  groups),
+  "Step–30-min cadence (between)"                      = corr_subset(acor, grp_step,  grp_cad30, groups),
+  "Step–DHRPS (between)"                               = corr_subset(acor, grp_step,  grp_dhrps, groups),
+  "1-min cadence–30-min cadence (between)"             = corr_subset(acor, grp_cad1,  grp_cad30, groups),
+  "1-min cadence–DHRPS (between)"                      = corr_subset(acor, grp_cad1,  grp_dhrps, groups),
+  "30-min cadence–DHRPS (between)"                     = corr_subset(acor, grp_cad30, grp_dhrps, groups),
+
+  # Each metric group vs all others
+  "Step count vs all others"                           = corr_vs_others(acor, grp_step,  groups),
+  "1-min cadence vs all others"                        = corr_vs_others(acor, grp_cad1,  groups),
+  "30-min cadence vs all others"                       = corr_vs_others(acor, grp_cad30, groups),
+  "DHRPS vs all others"                                = corr_vs_others(acor, grp_dhrps, groups),
+
+  # Time horizons vs all others
+  "Year vs all others"                                 = time_vs_others(acor, time_year,  time_groups),
+  "Six Months vs all others"                           = time_vs_others(acor, time_six,   time_groups),
+  "Month vs all others"                                = time_vs_others(acor, time_month, time_groups),
+  "Week vs all others"                                 = time_vs_others(acor, time_week,  time_groups),
+  "Day vs all others"                                  = time_vs_others(acor, time_day,   time_groups)
+)
+
+# --- Assemble summary table ---
+stab3 <- tibble(
+  comparison     = names(comparisons),
+  `median (IQR)` = map_chr(comparisons, summ_median_iqr)
+)
+
+# View
+stab3
+```
+
+```{r}
+write_excel_csv(stab3, '~/workspace/Data from All of Us Controlled Tier /workspace-bucket/tabfig/stable3.csv')
+```
+
+# Supplementary Data
+
+## Supplementary Data 1
+
+```{r}
+# --------------------------- Setup -------------------------------------------
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(stringr)
+library(openxlsx)
+
+# Exposures, time scales, and pretty labels
+exposures   <- c("steps", "cadence1", "cadence30", "dhrps")
+time_scales <- c("year", "six", "month", "week", "day")
+time_labels <- c(year = "year", six = "six", month = "month", week = "week", day = "day")
+
+# Optional: provide median follow-up time per time scale (replace NAs if you have values)
+median_follow_up <- c(year = NA, six = NA, month = NA, week = NA, day = NA)
+
+# Vectorized formatter: "x.xx (l.ll–h.hh)"
+fmt_effect <- function(est, low, high, digits = 2) {
+  est  <- suppressWarnings(as.numeric(est))
+  low  <- suppressWarnings(as.numeric(low))
+  high <- suppressWarnings(as.numeric(high))
+  n <- max(length(est), length(low), length(high))
+  if (n == 0) return(character())
+  out <- rep(NA_character_, n)
+  ok  <- !is.na(est) & !is.na(low) & !is.na(high)
+  if (any(ok)) {
+    fmt <- paste0("%.", digits, "f (%.", digits, "f–%." , digits, "f)")
+    out[ok] <- sprintf(fmt, est[ok], low[ok], high[ok])
+  }
+  out
+}
+
+# --------------------- Core builder for one time scale -----------------------
+build_table_for_scale <- function(scale) {
+  # --- Pull Cox pieces for each exposure
+  cox_list <- map(exposures, function(exp) {
+    obj_name <- paste0("cox_", scale, "_", exp)
+    if (!exists(obj_name, inherits = TRUE)) {
+      stop("Missing object: ", obj_name)
+    }
+    df <- get(obj_name, inherits = TRUE)
+
+    out <- df %>%
+      transmute(
+        phecode_string,
+        phecode,
+        !!paste0("HR_", exp) := fmt_effect(hazard_ratio, hazard_ratio_low, hazard_ratio_high),
+        !!paste0("p_cox_", exp) := as.numeric(p_value)
+      )
+
+    out_cases <- df %>%
+      select(phecode_string, phecode, cases) %>%
+      distinct()
+
+    list(results = out, cases = out_cases)
+  })
+
+  # Merge all Cox HR columns
+  cox_merged <- reduce(map(cox_list, "results"),
+                       ~ full_join(.x, .y, by = c("phecode_string", "phecode")))
+
+  # Pick a single Cox cases column (prefer from steps)
+  if (exists(paste0("cox_", scale, "_steps"), inherits = TRUE)) {
+    cox_cases <- get(paste0("cox_", scale, "_steps")) %>%
+      select(phecode_string, phecode, `# of cases (Cox)` = cases) %>%
+      distinct()
+  } else {
+    cox_cases <- map(cox_list, "cases") %>%
+      compact() %>%
+      reduce(~ full_join(.x, .y, by = c("phecode_string", "phecode"))) %>%
+      mutate(`# of cases (Cox)` = coalesce(!!!rlang::syms(setdiff(names(.), c("phecode_string","phecode"))))) %>%
+      select(phecode_string, phecode, `# of cases (Cox)`)
+  }
+
+  # --- Pull logistic pieces for each exposure
+  logistic_list <- map(exposures, function(exp) {
+    obj_name <- paste0("logistic_", scale, "_", exp)
+    if (!exists(obj_name, inherits = TRUE)) {
+      stop("Missing object: ", obj_name)
+    }
+    df <- get(obj_name, inherits = TRUE)
+
+    # CI bounds are given on log-odds scale -> exponentiate to OR scale
+    # keep NA propagation: if either conf_int is NA, CI stays NA
+    ci_low_log  <- pmin(df$conf_int_1, df$conf_int_2)
+    ci_high_log <- pmax(df$conf_int_1, df$conf_int_2)
+    ci_low  <- exp(ci_low_log)
+    ci_high <- exp(ci_high_log)
+
+    out <- df %>%
+      transmute(
+        phecode_string,
+        phecode,
+        !!paste0("OR_", exp) := fmt_effect(odds_ratio, ci_low, ci_high),
+        !!paste0("p_logistic_", exp) := as.numeric(p_value)
+      )
+
+    out_cases <- df %>%
+      select(phecode_string, phecode, cases) %>%
+      distinct()
+
+    list(results = out, cases = out_cases)
+  })
+
+  # Merge all logistic OR columns
+  logistic_merged <- reduce(map(logistic_list, "results"),
+                      ~ full_join(.x, .y, by = c("phecode_string", "phecode")))
+
+  # Pick logistic cases (prefer from steps)
+  if (exists(paste0("logistic_", scale, "_steps"), inherits = TRUE)) {
+    logistic_cases <- get(paste0("logistic_", scale, "_steps")) %>%
+      select(phecode_string, phecode, `# of cases (logistic)` = cases) %>%
+      distinct()
+  } else {
+    logistic_cases <- map(logistic_list, "cases") %>%
+      compact() %>%
+      reduce(~ full_join(.x, .y, by = c("phecode_string", "phecode"))) %>%
+      mutate(`# of cases (logistic)` = coalesce(!!!rlang::syms(setdiff(names(.), c("phecode_string","phecode"))))) %>%
+      select(phecode_string, phecode, `# of cases (logistic)`)
+  }
+
+  # --- Compose final table for this time scale
+  base <- full_join(cox_merged, cox_cases, by = c("phecode_string", "phecode")) %>%
+          full_join(logistic_merged, by = c("phecode_string", "phecode")) %>%
+          full_join(logistic_cases, by = c("phecode_string", "phecode"))
+
+  # Add median follow-up time (single value per time scale)
+  base <- base %>%
+    mutate(`median follow-up time` = median_follow_up[[ time_labels[[scale]] ]])
+
+  # Reorder columns per your spec
+  hr_cols   <- paste0("HR_", exposures)
+  or_cols   <- paste0("OR_", exposures)
+  p_cox_cols <- paste0("p_cox_", exposures)
+  p_logistic_cols  <- paste0("p_logistic_", exposures)
+
+  base <- base %>%
+    select(
+      phecode_string, phecode,
+      all_of(hr_cols), `# of cases (Cox)`, `median follow-up time`,
+      all_of(or_cols), `# of cases (logistic)`,
+      all_of(p_cox_cols), all_of(p_logistic_cols)  # keep for styling; not written
+    ) %>%
+    arrange(phecode_string, phecode)
+
+  # Bonferroni threshold for this sheet
+  n_rows <- nrow(base)
+  bonf <- ifelse(n_rows > 0, 0.05 / n_rows, NA_real_)
+
+  list(data = base, bonf = bonf,
+       hr_cols = hr_cols, or_cols = or_cols,
+       p_cox_cols = p_cox_cols, p_logistic_cols = p_logistic_cols)
+}
+
+# ------------------------- Build all tables ----------------------------------
+tables <- set_names(time_scales, time_scales) %>%
+  map(build_table_for_scale)
+
+# --------------------------- Write to Excel ----------------------------------
+wb <- createWorkbook()
+bold_style <- createStyle(textDecoration = "bold", halign = "left")
+
+for (scale in time_scales) {
+  tb <- tables[[scale]]
+  df <- tb$data
+
+  # Drop p-value helpers before writing
+  write_df <- df %>%
+    select(-all_of(tb$p_cox_cols), -all_of(tb$p_logistic_cols))
+
+  sheet_name <- time_labels[[scale]]
+  addWorksheet(wb, sheetName = sheet_name)
+  writeData(wb, sheet = sheet_name, x = write_df, withFilter = TRUE)
+
+  # Bold HR cells that pass Bonferroni
+  for (i in seq_along(tb$hr_cols)) {
+    hr_col <- tb$hr_cols[i]
+    p_col  <- tb$p_cox_cols[i]
+    if (!(hr_col %in% names(df)) || !(p_col %in% names(df))) next
+    sig_rows <- which(!is.na(df[[p_col]]) & df[[p_col]] < tb$bonf)
+    if (length(sig_rows)) {
+      col_index <- which(names(write_df) == hr_col)
+      addStyle(wb, sheet = sheet_name, style = bold_style,
+               rows = sig_rows + 1, cols = col_index, gridExpand = TRUE, stack = TRUE)
+    }
+  }
+
+  # Bold OR cells that pass Bonferroni
+  for (i in seq_along(tb$or_cols)) {
+    or_col <- tb$or_cols[i]
+    p_col  <- tb$p_logistic_cols[i]
+    if (!(or_col %in% names(df)) || !(p_col %in% names(df))) next
+    sig_rows <- which(!is.na(df[[p_col]]) & df[[p_col]] < tb$bonf)
+    if (length(sig_rows)) {
+      col_index <- which(names(write_df) == or_col)
+      addStyle(wb, sheet = sheet_name, style = bold_style,
+               rows = sig_rows + 1, cols = col_index, gridExpand = TRUE, stack = TRUE)
+    }
+  }
+
+  freezePane(wb, sheet = sheet_name, firstRow = TRUE)
+  setColWidths(wb, sheet = sheet_name, cols = 1:ncol(write_df), widths = "auto")
+}
+
+# Save workbook
+saveWorkbook(wb, file = "phecode_summary_by_timescale.xlsx", overwrite = TRUE)
+
+# ----------------------------- End of script ---------------------------------
+```
+
+## Supplementary Data 2
+
+```{r}
+# install.packages("writexl")  # if you don't have it
+library(dplyr)
+library(writexl)
+
+# ===================== CONFIG =====================
+alpha        <- 0.05
+pcol         <- "p_value"                 # p-value column
+codecol      <- "phecode"                 # unique phecode ID column
+string_cands <- c("phecode_string","phenotype","description","phewas_string")
+
+period_keys   <- c("day","week","month","six","year")
+period_labels <- c(day="Day", week="Week", month="Month", six="Six months", year="Year")
+
+variables <- c("steps","cadence1","cadence30","dhrps")
+models    <- c("logistic","cox")
+
+out_file  <- "phecode_significant_presence.xlsx"  # output Excel filename
+# ==================================================
+
+# Helper: pull significant rows (ID + string) for one (model, period, variable)
+sig_rows <- function(model, period, variable) {
+  obj <- paste(model, period, variable, sep = "_")  # e.g., "logistic_day_steps"
+  if (!exists(obj, inherits = TRUE)) stop("Missing object: ", obj)
+  df <- get(obj, inherits = TRUE)
+  if (!all(c(pcol, codecol) %in% names(df))) {
+    stop(sprintf("'%s' is missing required column(s): %s",
+                 obj, paste(setdiff(c(pcol, codecol), names(df)), collapse = ", ")))
+  }
+  # pick a readable-string column if present
+  stringcol <- intersect(string_cands, names(df))
+  stringcol <- if (length(stringcol)) stringcol[1] else NA_character_
+
+  thr <- if (nrow(df) > 0) alpha / nrow(df) else Inf
+
+  sig <- df %>% filter(.data[[pcol]] < thr)
+  out <- tibble(
+    code   = as.character(sig[[codecol]]),
+    string = if (!is.na(stringcol)) as.character(sig[[stringcol]]) else NA_character_
+  ) %>% distinct()
+  out
+}
+
+# Build one presence table for (model, variable)
+build_presence_table <- function(model, variable) {
+  # get significant codes + labels for each period
+  sig_list <- lapply(period_keys, function(per) {
+    s <- sig_rows(model, per, variable)
+    s$period <- unname(period_labels[per])
+    s
+  })
+  names(sig_list) <- unname(period_labels[period_keys])
+
+  # union of all significant codes across periods
+  all_codes <- unique(unlist(lapply(sig_list, `[[`, "code"), use.names = FALSE))
+
+  # empty case: return 0-row df with the right columns
+  if (length(all_codes) == 0) {
+    return(tibble(
+      phecode_string = character(),
+      `Day` = character(),
+      `Week` = character(),
+      `Month` = character(),
+      `Six months` = character(),
+      `Year` = character()
+    ))
+  }
+
+  # best available label per code (first non-NA seen)
+  label_df <- bind_rows(sig_list) %>%
+    arrange(!is.na(string)) %>%
+    group_by(code) %>%
+    summarize(phecode_string = dplyr::first(na.omit(string)), .groups = "drop")
+
+  # if label is missing, fall back to the code itself
+  label_df$phecode_string[is.na(label_df$phecode_string)] <- label_df$code
+
+  # start output with the label column, in alphabetical order
+  base <- label_df %>%
+    filter(code %in% all_codes) %>%
+    arrange(phecode_string)
+
+  # add "X" columns per period
+  out <- tibble(phecode_string = base$phecode_string)
+  for (nm in names(sig_list)) {
+    codes_here <- sig_list[[nm]]$code
+    out[[nm]] <- ifelse(base$code %in% codes_here, "X", "")
+  }
+
+  # ensure the column order is exactly requested
+  out <- out %>%
+    select(phecode_string,
+           `Day`, `Week`, `Month`, `Six months`, `Year`)
+  out
+}
+
+# Build all 8 sheets
+sheets <- list()
+for (m in models) {
+  for (v in variables) {
+    sheet_name <- paste(toupper(m), v, sep = "_")         # e.g., "logistic_steps"
+    sheets[[sheet_name]] <- build_presence_table(m, v)
+  }
+}
+
+# Write one Excel file with 8 sheets
+writexl::write_xlsx(sheets, path = out_file)
+
+message("Wrote: ", normalizePath(out_file))
+```
