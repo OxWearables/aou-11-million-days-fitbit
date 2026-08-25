@@ -392,46 +392,90 @@ dev.off()
 ### 2b Knowledge graph
 
 ```{r}
-# Set seed for reproducibility
-set.seed(123)
-
-# Convert correlation matrix to edge list
 cor_df <- as.data.frame(as.table(cor_matrix)) %>%
   rename(from = Var1, to = Var2, weight = Freq) %>%
-  filter(from != to)
+  filter(from != to) %>%
+  rowwise() %>%
+  mutate(pair = paste(sort(c(from, to)), collapse = "_")) %>%
+  ungroup() %>%
+  distinct(pair, .keep_all = TRUE) %>%
+  select(from, to, weight)
 
-# Remove duplicate edges
-cor_df <- cor_df %>%
-    rowwise() %>%
-    mutate(pair = paste(sort(c(from, to)), collapse = "_")) %>%
-    ungroup() %>%
-    distinct(pair, .keep_all = TRUE) %>%
-    select(from, to, weight)
-
-# Square weights to emphasize strong correlations
 cor_df$weight <- (abs(cor_df$weight))^2
 
-# Build nodes
 nodes <- data.frame(name = unique(c(cor_df$from, cor_df$to))) %>%
-  mutate(type = case_when(
-    grepl("step count", name) ~ "Step count",
-    grepl("1-min cadence", name) ~ "1-min cadence",
-    grepl("30-min cadence", name) ~ "30-min cadence",
-    grepl("DHRPS", name) ~ "DHRPS"
-  ))
+  mutate(
+    type = case_when(
+      grepl("step count", name) ~ "Step count",
+      grepl("1-min cadence", name) ~ "1-min cadence",
+      grepl("30-min cadence", name) ~ "30-min cadence",
+      grepl("DHRPS", name) ~ "DHRPS"
+    ),
+    period = case_when(
+      grepl("six month", name, ignore.case = TRUE) ~ "Six months",  # check before "month"
+      grepl("day", name, ignore.case = TRUE)   ~ "Day",
+      grepl("week", name, ignore.case = TRUE)  ~ "Week",
+      grepl("month", name, ignore.case = TRUE) ~ "Month",
+      grepl("year", name, ignore.case = TRUE)  ~ "Year",
+      TRUE ~ "Other"
+    ),
+    period = factor(period, levels = c("Day", "Week", "Month", "Six months", "Year", "Other"))
+  ) %>%
+  arrange(period, name) %>%
+  mutate(group_id = as.integer(period))
 
-# Build graph
-graph <- tidygraph::tbl_graph(nodes = nodes, edges = cor_df, directed = FALSE)
+# Define circular layout
+gap <- 0.15
+n <- nrow(nodes)
+n_groups <- n_distinct(nodes$group_id)
+usable_angle <- 2 * pi - gap * n_groups
 
-# Plot using ggraph
-knowledge <- ggraph(graph, layout = "fr") +
-    geom_edge_link(aes(width = weight, alpha = weight), color = "gray50") +
-    geom_node_point(aes(color = type), size = 5) +
-    geom_node_text(aes(label = name), repel = TRUE, size = 3) +
-    scale_edge_width(range = c(0.2, 2), name = "Similarity Strength") +
-    scale_edge_alpha(range = c(0.1, 0.8), guide = "none") +
-    scale_color_brewer(palette = "Set2", name = "Variable Type") +
-    theme_void()
+angles <- numeric(n)
+current_angle <- 0
+prev_group <- nodes$group_id[1]
+
+for (i in seq_len(n)) {
+  if (nodes$group_id[i] != prev_group) {
+    current_angle <- current_angle + gap
+    prev_group <- nodes$group_id[i]
+  }
+  angles[i] <- current_angle
+  current_angle <- current_angle + (usable_angle / n)
+}
+
+nodes$angle <- angles
+nodes$x <- cos(nodes$angle)
+nodes$y <- sin(nodes$angle)
+
+edges_plot <- cor_df %>%
+  left_join(nodes, by = c("from" = "name")) %>%
+  left_join(nodes, by = c("to" = "name"), suffix = c("", "_end")) %>%
+  filter(weight > 0.4) # Only keep strong associations
+
+knowledge <- ggplot() +
+  geom_curve(
+    data = edges_plot,
+    aes(x = x, y = y, xend = x_end, yend = y_end,
+        linewidth = weight, alpha = weight),
+    color = "gray40",
+    curvature = 0.15
+  ) +
+  geom_point(
+    data = nodes,
+    aes(x = x, y = y, color = type),
+    size = 5
+  ) +
+  geom_text(
+    data = nodes,
+    aes(x = x * 1.12, y = y * 1.12, label = name),
+    size = 3
+  ) +
+  scale_linewidth(range = c(0.3, 3), name = "Similarity Strength") +
+  scale_alpha(range = c(0.2, 0.95), guide = "none") +
+  scale_color_brewer(palette = "Set2", name = "Metric") +
+  coord_equal(clip = "off") +
+  xlim(-1.4, 1.4) + ylim(-1.4, 1.4) +
+  theme_void()
 
 knowledge
 ```
